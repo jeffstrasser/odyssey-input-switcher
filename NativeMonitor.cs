@@ -34,12 +34,16 @@ internal sealed class NativeMonitor : IMonitorConnection
 {
     private readonly PhysicalMonitorHandle handle;
     public string Description { get; }
+    internal string DisplayName { get; }
+    internal string? StableId { get; }
     internal int ReleaseError => handle.ReleaseError;
 
-    internal NativeMonitor(nint handle, string description)
+    internal NativeMonitor(nint handle, string description, string displayName, string? stableId)
     {
         this.handle = new PhysicalMonitorHandle(handle);
         Description = description;
+        DisplayName = displayName;
+        StableId = stableId;
     }
 
     public uint ReadInput()
@@ -72,7 +76,7 @@ internal sealed class NativeMonitor : IMonitorConnection
 
     public void Dispose() => handle.Dispose();
 
-    public override string ToString() => Description;
+    public override string ToString() => DisplayName;
 }
 
 internal sealed class MonitorInventory : IDisposable
@@ -135,6 +139,9 @@ internal sealed class MonitorInventory : IDisposable
         }
         if (count > 256)
             throw new InvalidOperationException($"{identity}: implausible physical monitor count {count}.");
+        string? stableId = count == 1 ? GetStableId(info.Device) : null;
+        if (stableId is null)
+            Messages.Add($"{identity}: no unambiguous monitor interface identity; default selection is unavailable.");
         var physical = new NativeMethods.PhysicalMonitor[count];
         if (!NativeMethods.GetPhysicalMonitorsFromHMONITOR(logical, count, physical))
         {
@@ -147,7 +154,10 @@ internal sealed class MonitorInventory : IDisposable
             for (int index = 0; index < physical.Length; index++)
             {
                 var monitor = new NativeMonitor(physical[index].Handle,
-                    $"{identity} / physical {index + 1}: {physical[index].Description}");
+                    $"{identity} / physical {index + 1}: {physical[index].Description}",
+                    $"{physical[index].Description} / {info.Device.Replace(@"\\.\", "")}" +
+                        (count > 1 ? $" / {index + 1}" : ""),
+                    stableId);
                 claimed[index] = true;
                 try
                 {
@@ -169,6 +179,26 @@ internal sealed class MonitorInventory : IDisposable
                     Messages.Add(NativeMethods.Error("Release unclaimed physical monitor handle").Message);
             }
         }
+    }
+
+    private static string? GetStableId(string display)
+    {
+        string? identity = null;
+        for (uint index = 0; index < 256; index++)
+        {
+            var device = new NativeMethods.DisplayDevice
+            {
+                Size = (uint)Marshal.SizeOf<NativeMethods.DisplayDevice>()
+            };
+            if (!NativeMethods.EnumDisplayDevices(display, index, ref device, 1))
+                return identity;
+            if ((device.Flags & 1) == 0 || string.IsNullOrWhiteSpace(device.DeviceId))
+                continue;
+            if (identity is not null)
+                return null;
+            identity = device.DeviceId;
+        }
+        return null;
     }
 
     public void Dispose()
@@ -211,6 +241,21 @@ internal static class NativeMethods
         internal string Description;
     }
 
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    internal struct DisplayDevice
+    {
+        internal uint Size;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+        internal string DeviceName;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
+        internal string DeviceString;
+        internal uint Flags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
+        internal string DeviceId;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
+        internal string DeviceKey;
+    }
+
     internal static Win32Exception Error(string operation)
     {
         int code = Marshal.GetLastWin32Error();
@@ -225,6 +270,10 @@ internal static class NativeMethods
     [DllImport("user32.dll", EntryPoint = "GetMonitorInfoW", CharSet = CharSet.Unicode, SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool GetMonitorInfo(nint monitor, ref MonitorInfo info);
+
+    [DllImport("user32.dll", EntryPoint = "EnumDisplayDevicesW", CharSet = CharSet.Unicode)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool EnumDisplayDevices(string display, uint index, ref DisplayDevice device, uint flags);
 
     [DllImport("dxva2.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

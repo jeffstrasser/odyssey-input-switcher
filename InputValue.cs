@@ -15,6 +15,32 @@ internal static class InputValue
     }
 }
 
+internal static class InputSettings
+{
+    internal static Dictionary<string, string> Resolve(Dictionary<string, string?>? saved)
+    {
+        // Extracted from the user's working app; confirmed by the user on their monitor.
+        var values = new Dictionary<string, string>
+        {
+            ["DisplayPort"] = "0x0F",
+            ["HDMI"] = "0x05",
+            ["Micro HDMI"] = "0x06"
+        };
+        if (saved is null)
+            return values;
+        foreach (string name in values.Keys.ToArray())
+        {
+            if (!saved.TryGetValue(name, out string? text))
+                continue;
+            if (text is null || (text.Trim().Length != 0 && !InputValue.TryParse(text, out _)))
+                throw new InvalidOperationException($"Saved value for {name} is invalid.");
+            if (text.Trim().Length != 0)
+                values[name] = text.Trim();
+        }
+        return values;
+    }
+}
+
 internal interface IMonitorConnection : IDisposable
 {
     string Description { get; }

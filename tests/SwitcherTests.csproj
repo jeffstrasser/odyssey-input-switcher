@@ -9,5 +9,6 @@
   <ItemGroup>
     <Compile Include="..\InputValue.cs" Link="InputValue.cs" />
     <Compile Include="..\NativeMonitor.cs" Link="NativeMonitor.cs" />
+    <Compile Include="..\MonitorSelection.cs" Link="MonitorSelection.cs" />
   </ItemGroup>
 </Project>
