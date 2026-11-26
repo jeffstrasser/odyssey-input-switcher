@@ -32,7 +32,10 @@ internal sealed class MainForm : Form
     {
         Text = "Ask before switching inputs", AutoSize = true, Checked = true
     };
-    private readonly Label status = new() { AutoSize = true, ForeColor = Color.FromArgb(90, 103, 122) };
+    private readonly Label status = new()
+    {
+        AutoSize = true, Visible = false, ForeColor = Color.FromArgb(90, 103, 122)
+    };
     private readonly Label defaultLabel = new() { AutoSize = true, ForeColor = Color.FromArgb(90, 103, 122) };
     private readonly Label diagnosticSummary = new() { AutoSize = true };
     private readonly TextBox log = new()
@@ -82,7 +85,7 @@ internal sealed class MainForm : Form
         Font = new Font("Segoe UI", 10);
         BackColor = Canvas;
         ForeColor = Ink;
-        ClientSize = new Size(600, 480);
+        ClientSize = new Size(600, 1);
         MinimumSize = SizeFromClientSize(ClientSize);
         FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;
@@ -212,8 +215,7 @@ internal sealed class MainForm : Form
     private void SetScaledMinimumSize()
     {
         MinimumSize = SizeFromClientSize(new Size(
-            (int)Math.Ceiling(600 * DeviceDpi / 96d),
-            (int)Math.Ceiling(480 * DeviceDpi / 96d)));
+            (int)Math.Ceiling(600 * DeviceDpi / 96d), 0));
     }
 
     private void BuildMainWindow()
@@ -624,7 +626,11 @@ internal sealed class MainForm : Form
     }
 
     private void Append(string message) => log.AppendText($"[{DateTime.Now:HH:mm:ss}] {message}\r\n");
-    private void SetStatus(string message) => status.Text = message;
+    private void SetStatus(string message)
+    {
+        status.Text = message;
+        status.Visible = message.Length != 0;
+    }
 
     private void ReportFailure(Exception error, bool showDialog = true)
     {

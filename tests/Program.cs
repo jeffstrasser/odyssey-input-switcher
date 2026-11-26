@@ -297,6 +297,20 @@ var layoutThread = new Thread(() =>
                 $"Content sizing preserves the designed minimum window width at {size}pt");
             Check(mainContent.Bottom <= main.ClientSize.Height || main.VerticalScroll.Visible,
                 $"Fixed main window fits content or allows scrolling at {size}pt");
+            Check(main.ClientSize.Height - mainContent.Bottom <= 1,
+                $"Main window has no unused height below its content at {size}pt");
+            int compactHeight = main.ClientSize.Height;
+            var setStatus = typeof(MainForm).GetMethod("SetStatus",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+            setStatus.Invoke(main, ["Downloading and verifying the update. Please wait for this operation to finish."]);
+            main.PerformLayout();
+            Check((main.ClientSize.Height > compactHeight || main.VerticalScroll.Visible) &&
+                (mainContent.Bottom <= main.ClientSize.Height || main.VerticalScroll.Visible),
+                $"Status messages expand the compact window without clipping at {size}pt");
+            setStatus.Invoke(main, [""]);
+            main.PerformLayout();
+            Check(main.ClientSize.Height == compactHeight,
+                $"Clearing status restores compact height at {size}pt");
             var (dialog, suppress) = main.CreateInputConfirmation(
                 "Samsung Odyssey OLED G9 - a long monitor description", "Micro HDMI", 6);
             using (dialog)
