@@ -21,21 +21,37 @@ This mapping is owner-confirmed for their setup, not a Samsung-published guarant
 Open `dist\win-x64\OdysseyInputSwitcher.exe` on an Intel/AMD x64 PC, or `dist\win-arm64\OdysseyInputSwitcher.exe` on a Windows ARM64 PC. These are self-contained builds; an installed .NET runtime is not required. Keep the app executable after extracting any distribution archive. Single-file .NET deployment extracts native runtime files into the user's temporary directory. The app is unsigned, so Windows may show its normal unrecognized-publisher warning.
 
 1. Connect the PC to the monitor using HDMI or DisplayPort. Keep the monitor awake and the PC's connection active. If the monitor has a DDC/CI setting, enable it; its presence on this exact model is not assumed.
-2. On startup, the app discovers physical monitors automatically. If there is **only one**, it selects that monitor. If there are **multiple**, it selects a uniquely matching saved default, or waits for you to choose from the monitor list. Click **Save as default** after selecting your preferred monitor to remember it.
+2. On startup, the app discovers physical monitors automatically. If there is **only one**, it selects that monitor. If there are **multiple**, it selects a uniquely matching saved default, or waits for you to choose from the monitor list. Choose **Settings > Save selected monitor as default** after selecting your preferred monitor to remember it.
 3. Click **DisplayPort**, **HDMI**, or **Micro HDMI**. The confirmation names the selected monitor and command; **Cancel** is the default. Select **Do not show me this again** to save the preference and skip future confirmations. Have the physical Source control available to recover before approving. The app sends one VCP `0x60` write, without a retry.
-4. Open **Advanced...** for diagnostics and input settings. The main window intentionally shows only monitor selection, input buttons, and a short status.
+4. Open **Settings** for **Input & monitor settings...**, **Diagnostics & logging...**, update checks, and Windows startup. The main window keeps these options in a dropdown rather than separate settings buttons.
+
+**Settings > About Odyssey...** in the main or tray menu shows the app name, installed version, creator, process architecture, and source repository.
 
 Discovery refreshes automatically after input-switch attempts, display-topology changes, and Windows resume. Rapid changes are debounced; discovery waits for any outstanding monitor operation before replacing its handles. **Refresh** is also available manually. Refreshing and selecting never send input commands.
 
-The main window can be resized, and the app uses per-monitor DPI scaling when moved between displays. The Advanced window opens centered over the main window and can be resized independently.
+The main and settings windows have fixed borders: they cannot be manually resized or maximized. The app still uses per-monitor DPI scaling when moved between displays. The main window keeps a minimum width but sizes its height to the content, with no empty status row when idle; settings open centered over it, with scrolling available for content that exceeds the window.
+
+The input confirmation grows to fit its full warning and buttons at larger font sizes. The main window scrolls when its content cannot fit, and input buttons size to their text.
 
 ## System tray
 
-The app's monitor icon appears in the Windows notification area while running (possibly under the hidden-icons arrow). Right-click it to choose **DisplayPort**, **HDMI**, or **Micro HDMI**, refresh monitors, open the app or Advanced, or **Exit**. Tray input actions use the same selected monitor, saved input values, and confirmation as the main window; they are disabled when no valid monitor is selected or an operation is in progress.
+The app's monitor icon appears in the Windows notification area while running (possibly under the hidden-icons arrow). Right-click it to choose **DisplayPort**, **HDMI**, or **Micro HDMI**, refresh monitors, open the app, access the **Settings** submenu, or **Exit**. Tray input actions use the same selected monitor, saved input values, and confirmation as the main window; they are disabled when no valid monitor is selected or an operation is in progress.
 
-**Run in tray**, minimizing, or closing the main window hides it without stopping the app. Double-click the tray icon or choose **Show Odyssey** to reopen it. Choose **Exit** from the tray menu to stop the app and release its monitor handles. Exiting waits for an outstanding monitor call or confirmation. This does not install a service or enable launch at Windows sign-in.
+**Run in tray**, minimizing, or closing the main window hides it without stopping the app. Double-click the tray icon or choose **Show Odyssey** to reopen it. Choose **Exit** from the tray menu to stop the app and release its monitor handles. Exiting waits for an outstanding operation or confirmation. This does not install a service.
 
-## Advanced and saved settings
+**Settings > Run at Windows startup** is opt-in and applies only to the current Windows user. It registers the published executable's quoted path with `--tray` in `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`; no administrator rights are required. At sign-in the app starts directly in the tray without opening its main window. Automatic update notifications remain in the tray until you choose **Settings > Check for updates...**. Uncheck the option to remove the registration. Keep the executable in a permanent location; after moving it, enable startup again from the new location. Windows Task Manager's Startup apps controls may independently disable launching. Development builds cannot enable this option. You can also launch a published executable with `--tray` manually.
+
+## Updates
+
+On launch, Odyssey checks the [latest stable GitHub release](https://github.com/jeffstrasser/odyssey-input-switcher/releases/latest) and asks before downloading a newer version. **No** is the default. You can retry using **Settings > Check for updates...** in the main or tray menu. Tray-mode launches notify without opening the upgrade prompt. Drafts and prereleases are not offered; network errors and GitHub rate limits are reported without preventing monitor use.
+
+If you approve, the app downloads the ZIP for its running process architecture (x64 or ARM64), verifies the SHA-256 digest supplied by GitHub, and checks the executable's PE structure, architecture, and embedded version against the release. It stages only the application executable and closes before replacing it. A temporary copy of the old app performs the replacement and restarts Odyssey. The backup is retained until the new app's UI and preferences have initialized and it reports readiness. A failed launch, early crash, or missing readiness signal within two minutes restores the old executable; restart it manually after a failed update. Temporary installer files are removed by the initialized app without blocking its UI. Failed installs report their error; a retained `.update-backup` must be preserved or moved before retrying. Readiness is not a guarantee against later runtime failures.
+
+In-place upgrades require the **published single-file release** in a writable directory. Protected installation folders, other running copies, or antivirus locks can prevent replacement; the app does not request elevation. Source builds cannot self-install. Saved input and monitor preferences remain unchanged. Packages are unsigned: the digest verifies the downloaded archive against GitHub metadata, not independent publisher identity. Old versions without this feature require one manual upgrade first.
+
+Release tags must be `vMAJOR.MINOR.PATCH` (or the same without `v`), with matching `OdysseyInputSwitcher-win-x64.zip` / `OdysseyInputSwitcher-win-arm64.zip` assets and GitHub SHA-256 digests. Publish with `.\build.ps1 -Version MAJOR.MINOR.PATCH` so the executable version matches the tag. The source version defaults to 1.2.0. Do not reuse version numbers.
+
+## Settings and saved preferences
 
 The **Diagnostics** tab contains the detailed log, process architecture, selected display, Windows monitor-interface identity, and saved default. **Read monitor diagnostics** reads VCP `0x60` and the raw capabilities string; each read's error is shown independently. A current value or `60(...)` capabilities list does not prove a working write mapping. No diagnostic read happens automatically during refresh.
 
@@ -71,6 +87,8 @@ dotnet publish OdysseyInputSwitcher.csproj -c Release -r win-arm64 --self-contai
 ```
 
 Cross-publishing ARM64 on an x64 PC is supported; it does not prove ARM64 execution. The hardware-free tests cover value parsing, saved-value overrides and preset restoration, sole-monitor selection, missing/duplicate/reordered default identities, monitor and confirmation preference serialization, single-write/no-readback behavior, write failures without retries, native interop structure sizes, and exactly-once release of valid zero-valued physical-monitor handles. Physical switching and native ARM64 execution need the corresponding hardware.
+
+Update tests cover version comparison, architecture-specific release selection, invalid metadata, digest mismatch, cancellation, safe ZIP extraction, executable structure/version/architecture validation, locks, readiness signals, and rollback after failed launches or early crashes. Startup tests cover quoted executable paths, invalid paths, development-build rejection before registry writes, hidden initial visibility with a tray icon, and reopening the main window. They do not enable Windows startup or simulate sign-in. After running the Release tests and publishing x64, `.\tests\UpdateSmoke.ps1 -PublishedExecutable .\dist\win-x64\OdysseyInputSwitcher.exe` exercises the real published installer with a harmless test executable, including initialization readiness, restart, and staging cleanup. Run that smoke test on x64 Windows; it never starts the monitor UI or invokes monitor APIs.
 
 The working mapping is confirmed by the owner's testing of the supplied app, not by sending commands during development. Local x64 UI validation does not prove native ARM64 execution or physical switching with this revised build.
 

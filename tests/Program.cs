@@ -1,6 +1,38 @@
 using System.Runtime.InteropServices;
+using System.Diagnostics;
+using System.IO.Compression;
+using System.Security.Cryptography;
 using System.Text.Json;
 using OdysseyInputSwitcher;
+
+// A harmless restart target for the published installer's end-to-end smoke test.
+if (args.Length == 3 && args[0] == "--cleanup-update")
+{
+    if (File.Exists(Path.Combine(args[2], "crash-before-ready")))
+        Environment.Exit(23);
+    UpdateInstaller.SignalReady(args[2]);
+    UpdateInstaller.Cleanup(int.Parse(args[1]), args[2]);
+    File.WriteAllText(Environment.ProcessPath + ".restarted", "Restart and cleanup succeeded.");
+    return;
+}
+
+if (args.Length == 4 && args[0] == "--verify-package")
+{
+    string staged = UpdateInstaller.CreateDirectory();
+    try
+    {
+        using (var archive = ZipFile.OpenRead(args[1]))
+            if (!archive.Entries.Select(entry => entry.FullName).Order()
+                .SequenceEqual(new[] { ReleaseUpdater.ExecutableName, "README.md" }.Order()))
+                throw new InvalidDataException("The release ZIP must contain exactly the app executable and README at its root.");
+        string executable = Path.Combine(staged, "payload.exe");
+        ReleaseUpdater.ExtractExecutable(args[1], executable);
+        ReleaseUpdater.ValidateExecutable(executable, Version.Parse(args[3]), Enum.Parse<Architecture>(args[2]));
+        Console.WriteLine($"PASS: {args[2]} release ZIP shape, executable headers, architecture, and version {args[3]}.");
+    }
+    finally { Directory.Delete(staged, recursive: true); }
+    return;
+}
 
 int assertions = 0;
 void Check(bool passed, string description)
@@ -108,7 +140,302 @@ Check(!zeroHandle.IsInvalid, "Zero is a valid physical-monitor handle");
 zeroHandle.Dispose();
 zeroHandle.Dispose();
 Check(releases == 1, "Release even a zero handle exactly once");
+
+void Reject<T>(Action action, string description) where T : Exception
+{
+    try { action(); Check(false, description); }
+    catch (T) { Check(true, description); }
+}
+string ReleaseJson(string tag = "v1.3.0", bool prerelease = false, bool draft = false,
+    string? digest = null, string? url = null, string runtime = "win-x64") =>
+    JsonSerializer.Serialize(new
+    {
+        tag_name = tag, draft, prerelease,
+        assets = new[] { new
+        {
+            name = $"OdysseyInputSwitcher-{runtime}.zip",
+            browser_download_url = url ?? $"{ReleaseUpdater.RepositoryUrl}/releases/download/{tag}/OdysseyInputSwitcher-{runtime}.zip",
+            digest = digest ?? "sha256:" + new string('a', 64)
+        } }
+    });
+var current = new Version(1, 2, 0, 0);
+Check(ReleaseUpdater.ParseRelease(ReleaseJson(), current, Architecture.X64)?.Version == new Version(1, 3, 0, 0),
+    "Offer a newer stable release with normalized version components");
+Check(ReleaseUpdater.ParseRelease(ReleaseJson(runtime: "win-arm64"), current, Architecture.Arm64)!
+    .DownloadUrl.AbsolutePath.EndsWith("OdysseyInputSwitcher-win-arm64.zip"), "Select native ARM64 asset");
+foreach (string tag in new[] { "v1.2.0", "1.2.0.0", "v1.1.0" })
+    Check(ReleaseUpdater.ParseRelease(ReleaseJson(tag), current, Architecture.X64) is null,
+        "Do not offer current or older release " + tag);
+Check(ReleaseUpdater.ParseRelease(ReleaseJson(prerelease: true), current, Architecture.X64) is null,
+    "Do not offer prereleases");
+Check(ReleaseUpdater.ParseRelease(ReleaseJson(draft: true), current, Architecture.X64) is null,
+    "Do not offer drafts");
+Reject<InvalidDataException>(() => ReleaseUpdater.ParseRelease(ReleaseJson("v2.0.0-beta"), current, Architecture.X64),
+    "Reject non-stable version tag");
+Reject<InvalidDataException>(() => ReleaseUpdater.ParseRelease(ReleaseJson(digest: ""), current, Architecture.X64),
+    "Reject missing digest rather than silently skipping verification");
+Reject<InvalidDataException>(() => ReleaseUpdater.ParseRelease(ReleaseJson(url: "https://example.com/update.zip"), current, Architecture.X64),
+    "Reject assets outside the repository");
+Reject<InvalidDataException>(() => ReleaseUpdater.ParseRelease(ReleaseJson(), current, Architecture.Arm64),
+    "Reject missing matching architecture instead of installing x64 on ARM64");
+Reject<PlatformNotSupportedException>(() => ReleaseUpdater.ParseRelease(ReleaseJson(), current, Architecture.X86),
+    "Reject unsupported process architectures");
+string testDirectory = UpdateInstaller.CreateDirectory();
+Check(StartupRegistration.CreateCommand(@"C:\Program Files\Odyssey\Input Switcher.exe") ==
+    "\"C:\\Program Files\\Odyssey\\Input Switcher.exe\" --tray",
+    "Startup command quotes paths with spaces and launches directly in tray mode");
+Reject<ArgumentException>(() => StartupRegistration.CreateCommand("relative.exe"),
+    "Reject relative startup paths");
+Reject<ArgumentException>(() => StartupRegistration.CreateCommand("C:\\bad\"path.exe"),
+    "Reject quotes that could corrupt the startup command");
+try
+{
+    UpdateInstaller.ValidateDirectory(testDirectory);
+    if (!ReleaseUpdater.IsSingleFileBuild())
+    {
+        Reject<InvalidOperationException>(() => ReleaseUpdater.StartInstaller(testDirectory),
+            "Source apphosts cannot be copied as standalone installers");
+        Reject<InvalidOperationException>(() => StartupRegistration.SetEnabled(true),
+            "Development builds reject startup registration before writing the registry");
+    }
+    Reject<InvalidDataException>(() => UpdateInstaller.ValidateDirectory(Path.GetTempPath()),
+        "Reject cleanup of arbitrary directories");
+    string archivePath = Path.Combine(testDirectory, "test.zip");
+    void MakeArchive(params (string Name, byte[] Bytes)[] entries)
+    {
+        File.Delete(archivePath);
+        using var archive = ZipFile.Open(archivePath, ZipArchiveMode.Create);
+        foreach (var entry in entries)
+        {
+            using var stream = archive.CreateEntry(entry.Name).Open();
+            stream.Write(entry.Bytes);
+        }
+    }
+    byte[] executable = [(byte)'M', (byte)'Z', 1, 2];
+    MakeArchive((ReleaseUpdater.ExecutableName, executable), ("../escaped.exe", executable));
+    string payload = Path.Combine(testDirectory, "payload.exe");
+    ReleaseUpdater.ExtractExecutable(archivePath, payload);
+    Check(File.ReadAllBytes(payload).SequenceEqual(executable), "Extract exactly the root executable");
+    Check(!File.Exists(Path.Combine(Path.GetDirectoryName(testDirectory)!, "escaped.exe")),
+        "Ignore traversal entries instead of extracting them");
+    Reject<InvalidDataException>(() => ReleaseUpdater.ValidateExecutable(payload, new Version(1, 3, 0),
+        RuntimeInformation.ProcessArchitecture), "Reject MZ-only payload before installation");
+    File.Delete(payload);
+    MakeArchive(("nested/" + ReleaseUpdater.ExecutableName, executable));
+    Reject<InvalidDataException>(() => ReleaseUpdater.ExtractExecutable(archivePath, payload),
+        "Reject packages missing the root executable");
+    MakeArchive((ReleaseUpdater.ExecutableName, executable), (ReleaseUpdater.ExecutableName, executable));
+    Reject<InvalidDataException>(() => ReleaseUpdater.ExtractExecutable(archivePath, payload),
+        "Reject duplicate executable entries");
+    MakeArchive((ReleaseUpdater.ExecutableName, [1, 2, 3]));
+    Reject<InvalidDataException>(() => ReleaseUpdater.ExtractExecutable(archivePath, payload),
+        "Reject non-executable payload");
+    File.Delete(payload);
+    string fixture = Environment.ProcessPath!;
+    var fixtureInfo = FileVersionInfo.GetVersionInfo(fixture);
+    var fixtureVersion = new Version(fixtureInfo.FileMajorPart, fixtureInfo.FileMinorPart,
+        fixtureInfo.FileBuildPart, fixtureInfo.FilePrivatePart);
+    byte[] fixtureBytes = File.ReadAllBytes(fixture);
+    MakeArchive((ReleaseUpdater.ExecutableName, fixtureBytes));
+    byte[] zipBytes = File.ReadAllBytes(archivePath);
+    var update = new ReleaseUpdate(fixtureVersion, new Uri(ReleaseUpdater.RepositoryUrl),
+        Convert.ToHexString(SHA256.HashData(zipBytes)));
+    using (var updater = new ReleaseUpdater(new HttpClient(new ArchiveHandler(zipBytes))))
+    {
+        string staged = await updater.StageAsync(update, CancellationToken.None);
+        try
+        {
+            Check(File.ReadAllBytes(Path.Combine(staged, "payload.exe")).SequenceEqual(fixtureBytes),
+                "Stage only SHA-256-verified bytes with valid architecture and version");
+        }
+        finally { Directory.Delete(staged, recursive: true); }
+        try
+        {
+            await updater.StageAsync(update with { Sha256 = new string('0', 64) }, CancellationToken.None);
+            Check(false, "Reject tampered download");
+        }
+        catch (InvalidDataException) { Check(true, "Reject tampered download"); }
+        using var canceled = new CancellationTokenSource();
+        canceled.Cancel();
+        try
+        {
+            await updater.StageAsync(update, canceled.Token);
+            Check(false, "Cancel update staging");
+        }
+        catch (OperationCanceledException) { Check(true, "Cancel update staging"); }
+    }
+    MakeArchive((ReleaseUpdater.ExecutableName, executable));
+    byte[] invalidZip = File.ReadAllBytes(archivePath);
+    using (var updater = new ReleaseUpdater(new HttpClient(new ArchiveHandler(invalidZip))))
+    {
+        try
+        {
+            await updater.StageAsync(update with { Sha256 = Convert.ToHexString(SHA256.HashData(invalidZip)) },
+                CancellationToken.None);
+            Check(false, "Reject invalid executable even when archive digest is correct");
+        }
+        catch (InvalidDataException) { Check(true, "Reject invalid executable even when archive digest is correct"); }
+    }
+    using (var updater = new ReleaseUpdater(new HttpClient(new ArchiveHandler(zipBytes))))
+    {
+        try
+        {
+            await updater.StageAsync(update with { Version = new Version(fixtureVersion.Major + 1, 0, 0) },
+                CancellationToken.None);
+            Check(false, "Reject version-mismatched executable during staging");
+        }
+        catch (InvalidDataException) { Check(true, "Reject version-mismatched executable during staging"); }
+    }
+    ReleaseUpdater.ValidateExecutable(fixture, fixtureVersion, RuntimeInformation.ProcessArchitecture);
+    Reject<InvalidDataException>(() => ReleaseUpdater.ValidateExecutable(fixture,
+        new Version(fixtureVersion.Major + 1, 0, 0), RuntimeInformation.ProcessArchitecture),
+        "Reject executable whose embedded version differs from its release");
+    Reject<InvalidDataException>(() => ReleaseUpdater.ValidateExecutable(fixture, fixtureVersion,
+        RuntimeInformation.ProcessArchitecture == Architecture.Arm64 ? Architecture.X64 : Architecture.Arm64),
+        "Reject executable with the wrong process architecture");
+    File.WriteAllBytes(payload, fixtureBytes[..(fixtureBytes.Length / 2)]);
+    Reject<InvalidDataException>(() => ReleaseUpdater.ValidateExecutable(payload, fixtureVersion,
+        RuntimeInformation.ProcessArchitecture), "Reject truncated executable section data");
+    using (var process = Process.GetCurrentProcess())
+    {
+        File.WriteAllText(Path.Combine(testDirectory, "ready"), "-1");
+        Reject<TimeoutException>(() => UpdateInstaller.WaitForReady(process, testDirectory,
+            TimeSpan.FromMilliseconds(150)), "Ignore readiness signals from another process");
+        UpdateInstaller.SignalReady(testDirectory);
+        UpdateInstaller.WaitForReady(process, testDirectory, TimeSpan.FromSeconds(1));
+        Check(true, "Accept atomic initialization readiness signal for the expected process");
+        File.Delete(Path.Combine(testDirectory, "ready"));
+    }
+    string target = Path.Combine(testDirectory, "installed.exe");
+    string backup = target + ".update-backup";
+    File.WriteAllText(target, "old");
+    File.WriteAllText(payload, "new");
+    UpdateInstaller.ReplaceExecutable(payload, target, backup);
+    Check(File.ReadAllText(target) == "new" && File.ReadAllText(backup) == "old",
+        "Atomic replacement keeps previous executable for rollback");
+    Check(!File.Exists(target + ".update-new"), "Replacement removes temporary adjacent file");
+    Reject<IOException>(() => UpdateInstaller.ReplaceExecutable(payload, target, backup),
+        "Do not overwrite an unresolved backup");
+    File.Move(backup, target, overwrite: true);
+    using (var locked = new FileStream(target, FileMode.Open, FileAccess.Read, FileShare.Read))
+        Reject<IOException>(() => UpdateInstaller.ReplaceExecutable(payload, target, backup),
+            "Locked installation fails instead of corrupting existing executable");
+    Check(File.ReadAllText(target) == "old" && !File.Exists(target + ".update-new"),
+        "Failed replacement leaves original executable and cleans adjacent file");
+    Reject<System.ComponentModel.Win32Exception>(() => UpdateInstaller.Apply(int.MaxValue, target, testDirectory),
+        "Restarting an invalid executable fails explicitly");
+    Check(File.ReadAllText(target) == "old" && !File.Exists(backup),
+        "Failed process restart rolls back the previous executable");
+    string crashTarget = Path.Combine(AppContext.BaseDirectory, "crash-test-" + Guid.NewGuid().ToString("N") + ".exe");
+    try
+    {
+        File.WriteAllText(crashTarget, "old");
+        File.Copy(fixture, payload, overwrite: true);
+        File.WriteAllText(Path.Combine(testDirectory, "crash-before-ready"), "");
+        Reject<InvalidOperationException>(() => UpdateInstaller.Apply(int.MaxValue, crashTarget, testDirectory),
+            "Immediate post-launch crash is treated as failed initialization");
+        Check(File.ReadAllText(crashTarget) == "old",
+            "Restore original executable after an updated process crashes before readiness");
+    }
+    finally { File.Delete(crashTarget); }
+}
+finally { Directory.Delete(testDirectory, recursive: true); }
+Exception? layoutError = null;
+var layoutThread = new Thread(() =>
+{
+    try
+    {
+        Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
+        using (var hidden = new MainForm(startInTray: true))
+        {
+            hidden.Show();
+            Check(!hidden.Visible && hidden.IsHandleCreated,
+                "Tray startup creates the message-loop handle without showing the main window");
+            var notify = (NotifyIcon)typeof(MainForm).GetField("tray",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(hidden)!;
+            Check(notify.Visible, "Tray startup exposes its notification icon");
+            typeof(MainForm).GetMethod("ShowMainWindow",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.Invoke(hidden, null);
+            Check(hidden.Visible, "Showing Odyssey exits hidden-startup mode");
+            hidden.Hide();
+        }
+        using var main = new MainForm();
+        Check(main.FormBorderStyle == FormBorderStyle.FixedSingle && !main.MaximizeBox,
+            "Main window cannot be manually resized or maximized");
+        var advanced = (Form)typeof(MainForm).GetField("advanced",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(main)!;
+        Check(advanced.FormBorderStyle == FormBorderStyle.FixedSingle && !advanced.MaximizeBox,
+            "Advanced window cannot be manually resized or maximized");
+        foreach (float size in new[] { 10f, 16f, 24f })
+        {
+            using var font = new System.Drawing.Font("Segoe UI", size);
+            main.Font = font;
+            _ = main.Handle;
+            typeof(MainForm).GetMethod("SetScaledMinimumSize",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.Invoke(main, null);
+            main.PerformLayout();
+            var mainContent = (TableLayoutPanel)main.Controls[0];
+            mainContent.PerformLayout();
+            Check(main.Width >= main.MinimumSize.Width && main.ClientSize.Width >= 600 * main.DeviceDpi / 96d,
+                $"Content sizing preserves the designed minimum window width at {size}pt");
+            Check(mainContent.Bottom <= main.ClientSize.Height || main.VerticalScroll.Visible,
+                $"Fixed main window fits content or allows scrolling at {size}pt");
+            Check(main.ClientSize.Height - mainContent.Bottom <= 1,
+                $"Main window has no unused height below its content at {size}pt");
+            int compactHeight = main.ClientSize.Height;
+            var setStatus = typeof(MainForm).GetMethod("SetStatus",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+            setStatus.Invoke(main, ["Downloading and verifying the update. Please wait for this operation to finish."]);
+            main.PerformLayout();
+            Check((main.ClientSize.Height > compactHeight || main.VerticalScroll.Visible) &&
+                (mainContent.Bottom <= main.ClientSize.Height || main.VerticalScroll.Visible),
+                $"Status messages expand the compact window without clipping at {size}pt");
+            setStatus.Invoke(main, [""]);
+            main.PerformLayout();
+            Check(main.ClientSize.Height == compactHeight,
+                $"Clearing status restores compact height at {size}pt");
+            var (dialog, suppress) = main.CreateInputConfirmation(
+                "Samsung Odyssey OLED G9 - a long monitor description", "Micro HDMI", 6);
+            using (dialog)
+            {
+                // Create handles and lay out without showing the dialog or discovering monitors.
+                _ = dialog.Handle;
+                dialog.PerformAutoScale();
+                dialog.PerformLayout();
+                var content = (TableLayoutPanel)dialog.Controls[0];
+                content.PerformLayout();
+                var warning = (Label)content.GetControlFromPosition(0, 1)!;
+                Check(warning.Height >= warning.GetPreferredSize(new System.Drawing.Size(warning.Width, 0)).Height,
+                    $"Full confirmation warning fits at {size}pt");
+                Check(warning.Bottom <= suppress.Top,
+                    $"Confirmation warning does not overlap preference at {size}pt");
+                Check(content.Bottom <= dialog.ClientSize.Height,
+                    $"All confirmation rows fit inside the dialog at {size}pt");
+                Check(dialog.AcceptButton is Button button && button.Text == "Cancel",
+                    $"Cancel remains default at {size}pt");
+            }
+        }
+    }
+    catch (Exception error) { layoutError = error; }
+});
+layoutThread.SetApartmentState(ApartmentState.STA);
+layoutThread.Start();
+layoutThread.Join();
+if (layoutError is not null)
+    throw new Exception("Font scaling regression failed.", layoutError);
 Console.WriteLine($"PASS: {assertions} hardware-free assertions. No monitor API calls or writes.");
+
+internal sealed class ArchiveHandler(byte[] bytes) : HttpMessageHandler
+{
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent(bytes)
+        });
+    }
+}
 
 internal sealed class FakeMonitor : IMonitorConnection
 {
