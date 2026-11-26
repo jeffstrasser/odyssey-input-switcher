@@ -253,10 +253,22 @@ var layoutThread = new Thread(() =>
     {
         Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
         using var main = new MainForm();
+        Check(main.FormBorderStyle == FormBorderStyle.FixedSingle && !main.MaximizeBox,
+            "Main window cannot be manually resized or maximized");
+        var advanced = (Form)typeof(MainForm).GetField("advanced",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(main)!;
+        Check(advanced.FormBorderStyle == FormBorderStyle.FixedSingle && !advanced.MaximizeBox,
+            "Advanced window cannot be manually resized or maximized");
         foreach (float size in new[] { 10f, 16f, 24f })
         {
             using var font = new System.Drawing.Font("Segoe UI", size);
             main.Font = font;
+            _ = main.Handle;
+            main.PerformLayout();
+            var mainContent = (TableLayoutPanel)main.Controls[0];
+            mainContent.PerformLayout();
+            Check(mainContent.Bottom <= main.ClientSize.Height || main.VerticalScroll.Visible,
+                $"Fixed main window fits content or allows scrolling at {size}pt");
             var (dialog, suppress) = main.CreateInputConfirmation(
                 "Samsung Odyssey OLED G9 - a long monitor description", "Micro HDMI", 6);
             using (dialog)

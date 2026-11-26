@@ -27,7 +27,7 @@ Open `dist\win-x64\OdysseyInputSwitcher.exe` on an Intel/AMD x64 PC, or `dist\wi
 
 Discovery refreshes automatically after input-switch attempts, display-topology changes, and Windows resume. Rapid changes are debounced; discovery waits for any outstanding monitor operation before replacing its handles. **Refresh** is also available manually. Refreshing and selecting never send input commands.
 
-The main window can be resized, and the app uses per-monitor DPI scaling when moved between displays. The Advanced window opens centered over the main window and can be resized independently.
+The main and Advanced windows have fixed borders: they cannot be manually resized or maximized. The app still uses per-monitor DPI scaling when moved between displays. The main window sizes to its content; Advanced opens centered over it, with scrolling available for settings that exceed the window.
 
 The input confirmation grows to fit its full warning and buttons at larger font sizes. The main window scrolls when its content cannot fit, and input buttons size to their text.
 

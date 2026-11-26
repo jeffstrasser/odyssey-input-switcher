@@ -74,7 +74,10 @@ internal sealed class MainForm : Form
         BackColor = Canvas;
         ForeColor = Ink;
         ClientSize = new Size(600, 480);
-        MinimumSize = new Size(560, 480);
+        FormBorderStyle = FormBorderStyle.FixedSingle;
+        MaximizeBox = false;
+        AutoSize = true;
+        AutoSizeMode = AutoSizeMode.GrowAndShrink;
         using var iconStream = Assembly.GetExecutingAssembly()
             .GetManifestResourceStream("OdysseyInputSwitcher.assets.monitor.ico")
             ?? throw new InvalidOperationException("The monitor icon resource is missing.");
@@ -241,7 +244,8 @@ internal sealed class MainForm : Form
         advanced.ForeColor = Ink;
         advanced.AutoScaleMode = AutoScaleMode.Dpi;
         advanced.ClientSize = new Size(750, 560);
-        advanced.MinimumSize = new Size(650, 500);
+        advanced.FormBorderStyle = FormBorderStyle.FixedSingle;
+        advanced.MaximizeBox = false;
         advanced.StartPosition = FormStartPosition.CenterParent;
         advanced.Icon = Icon;
         advanced.FormClosing += (_, e) =>
@@ -253,8 +257,14 @@ internal sealed class MainForm : Form
             }
         };
         var tabs = new TabControl { Dock = DockStyle.Fill, Padding = new Point(16, 8) };
-        var diagnosticTab = new TabPage("Diagnostics") { BackColor = Canvas, Padding = new Padding(16) };
-        var settingsTab = new TabPage("Inputs & default monitor") { BackColor = Canvas, Padding = new Padding(16) };
+        var diagnosticTab = new TabPage("Diagnostics")
+        {
+            BackColor = Canvas, Padding = new Padding(16), AutoScroll = true
+        };
+        var settingsTab = new TabPage("Inputs & default monitor")
+        {
+            BackColor = Canvas, Padding = new Padding(16), AutoScroll = true
+        };
         var diagnosticLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3 };
         diagnosticLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         diagnosticLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
