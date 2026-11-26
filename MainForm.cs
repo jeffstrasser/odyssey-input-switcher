@@ -439,6 +439,21 @@ internal sealed class MainForm : Form
         items.Add("Diagnostics & logging...", null, (_, _) => ShowAdvanced(0));
         update.Click += async (_, _) => await CheckForUpdatesAsync(manual: true);
         items.Add(update);
+        items.Add(new ToolStripSeparator());
+        items.Add("About Odyssey...", null, (_, _) => ShowAbout());
+    }
+
+    private void ShowAbout()
+    {
+        ShowMainWindow();
+        MessageBox.Show(this,
+            "Odyssey Input Switcher\r\n" +
+            $"Version: {ReleaseUpdater.CurrentVersion.ToString(3)}\r\n" +
+            "Creator: Jeffrey Strasser (jeffstrasser)\r\n" +
+            $"Architecture: {RuntimeInformation.ProcessArchitecture}\r\n\r\n" +
+            "Switch monitor inputs using Windows DDC/CI.\r\n\r\n" +
+            ReleaseUpdater.RepositoryUrl,
+            "About Odyssey Input Switcher", MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
 
     private void RefreshStartupSetting()

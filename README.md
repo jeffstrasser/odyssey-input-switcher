@@ -25,6 +25,8 @@ Open `dist\win-x64\OdysseyInputSwitcher.exe` on an Intel/AMD x64 PC, or `dist\wi
 3. Click **DisplayPort**, **HDMI**, or **Micro HDMI**. The confirmation names the selected monitor and command; **Cancel** is the default. Select **Do not show me this again** to save the preference and skip future confirmations. Have the physical Source control available to recover before approving. The app sends one VCP `0x60` write, without a retry.
 4. Open **Settings** for **Input & monitor settings...**, **Diagnostics & logging...**, update checks, and Windows startup. The main window keeps these options in a dropdown rather than separate settings buttons.
 
+**Settings > About Odyssey...** in the main or tray menu shows the app name, installed version, creator, process architecture, and source repository.
+
 Discovery refreshes automatically after input-switch attempts, display-topology changes, and Windows resume. Rapid changes are debounced; discovery waits for any outstanding monitor operation before replacing its handles. **Refresh** is also available manually. Refreshing and selecting never send input commands.
 
 The main and settings windows have fixed borders: they cannot be manually resized or maximized. The app still uses per-monitor DPI scaling when moved between displays. The main window sizes to its content; settings open centered over it, with scrolling available for content that exceeds the window.
