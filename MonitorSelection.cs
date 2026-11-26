@@ -25,4 +25,5 @@ internal static class MonitorSelection
 internal sealed class Preferences
 {
     public string? DefaultMonitorId { get; set; }
+    public bool SuppressSwitchConfirmation { get; set; }
 }
