@@ -22,6 +22,10 @@ internal sealed class MainForm : Form
     private readonly Button save = MakeButton("Save input values");
     private readonly Button restore = MakeButton("Use working Odyssey values");
     private readonly Button clearDefault = MakeButton("Clear default monitor");
+    private readonly CheckBox confirmSwitch = new()
+    {
+        Text = "Ask before switching inputs", AutoSize = true, Checked = true
+    };
     private readonly Label status = new() { AutoSize = true, ForeColor = Color.FromArgb(90, 103, 122) };
     private readonly Label defaultLabel = new() { AutoSize = true, ForeColor = Color.FromArgb(90, 103, 122) };
     private readonly Label diagnosticSummary = new() { AutoSize = true };
@@ -67,8 +71,8 @@ internal sealed class MainForm : Form
         Font = new Font("Segoe UI", 10);
         BackColor = Canvas;
         ForeColor = Ink;
-        ClientSize = new Size(550, 440);
-        MinimumSize = new Size(550, 480);
+        ClientSize = new Size(600, 480);
+        MinimumSize = new Size(560, 480);
         using var iconStream = Assembly.GetExecutingAssembly()
             .GetManifestResourceStream("OdysseyInputSwitcher.assets.monitor.ico")
             ?? throw new InvalidOperationException("The monitor icon resource is missing.");
@@ -93,6 +97,7 @@ internal sealed class MainForm : Form
         advancedButton.Click += (_, _) => ShowAdvanced();
         diagnostics.Click += async (_, _) => await DiagnosticsAsync();
         save.Click += (_, _) => SaveSettings();
+        confirmSwitch.CheckedChanged += (_, _) => SaveConfirmationPreference();
         restore.Click += (_, _) =>
         {
             ApplySettings(InputSettings.Resolve(null));
@@ -132,6 +137,7 @@ internal sealed class MainForm : Form
                     tray.ShowBalloonTip(4000, "Odyssey is still running",
                         "Right-click the monitor icon to switch inputs or exit.", ToolTipIcon.Info);
                 }
+
             }
             else if (busy || confirming)
             {
@@ -156,37 +162,47 @@ internal sealed class MainForm : Form
     {
         var layout = new TableLayoutPanel
         {
-            Dock = DockStyle.Fill, Padding = new Padding(24), ColumnCount = 1, RowCount = 7
+            Dock = DockStyle.Fill, Padding = new Padding(28), ColumnCount = 1, RowCount = 9
         };
-        for (int i = 0; i < 6; i++)
+        for (int i = 0; i < 8; i++)
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         layout.Controls.Add(new Label
         {
-            Text = "Odyssey", Font = new Font(Font.FontFamily, 25, FontStyle.Bold),
-            AutoSize = true, Margin = new Padding(0, 0, 0, 0)
+            Text = "Odyssey Input Switcher", Font = new Font(Font.FontFamily, 23, FontStyle.Bold),
+            AutoSize = true, Margin = new Padding(0, 0, 0, 2)
         }, 0, 0);
         layout.Controls.Add(new Label
         {
             Text = "Choose where your monitor gets its picture.",
-            AutoSize = true, ForeColor = status.ForeColor, Margin = new Padding(2, 0, 0, 16)
+            AutoSize = true, ForeColor = status.ForeColor, Margin = new Padding(2, 0, 0, 22)
         }, 0, 1);
+        layout.Controls.Add(new Label
+        {
+            Text = "MONITOR", AutoSize = true, ForeColor = Accent,
+            Font = new Font(Font, FontStyle.Bold), Margin = new Padding(2, 0, 0, 2)
+        }, 0, 2);
         var selection = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 2 };
         selection.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         selection.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        monitors.Margin = new Padding(0, 8, 10, 8);
+        monitors.Margin = new Padding(0, 6, 10, 8);
         selection.Controls.Add(monitors, 0, 0);
         selection.Controls.Add(refresh, 1, 0);
-        layout.Controls.Add(selection, 0, 2);
+        layout.Controls.Add(selection, 0, 3);
         var defaults = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top };
         defaults.Controls.Add(saveDefault);
         defaultLabel.Margin = new Padding(4, 6, 0, 6);
         defaults.Controls.Add(defaultLabel);
-        layout.Controls.Add(defaults, 0, 3);
+        layout.Controls.Add(defaults, 0, 4);
+        layout.Controls.Add(new Label
+        {
+            Text = "SWITCH INPUT", AutoSize = true, ForeColor = Accent,
+            Font = new Font(Font, FontStyle.Bold), Margin = new Padding(2, 18, 0, 2)
+        }, 0, 5);
         var inputs = new TableLayoutPanel
         {
             Dock = DockStyle.Top, Height = 70, RowCount = 1, ColumnCount = 3,
-            Margin = new Padding(0, 10, 0, 10)
+            Margin = new Padding(0, 6, 0, 10)
         };
         inputs.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         for (int i = 0; i < inputNames.Length; i++)
@@ -201,16 +217,16 @@ internal sealed class MainForm : Form
             switches[i].Click += async (_, _) => await SwitchAsync(index);
             inputs.Controls.Add(switches[i], i, 0);
         }
-        layout.Controls.Add(inputs, 0, 4);
+        layout.Controls.Add(inputs, 0, 6);
         var footer = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top };
         footer.Controls.Add(advancedButton);
         var hide = MakeButton("Run in tray");
         hide.Click += (_, _) => { advanced.Hide(); Hide(); };
         footer.Controls.Add(hide);
-        layout.Controls.Add(footer, 0, 5);
-        status.MaximumSize = new Size(490, 0);
+        layout.Controls.Add(footer, 0, 7);
+        status.MaximumSize = new Size(540, 0);
         status.Margin = new Padding(2, 12, 0, 0);
-        layout.Controls.Add(status, 0, 6);
+        layout.Controls.Add(status, 0, 8);
         Controls.Add(layout);
     }
 
@@ -249,7 +265,7 @@ internal sealed class MainForm : Form
 
         var settingsLayout = new TableLayoutPanel
         {
-            Dock = DockStyle.Top, AutoSize = true, ColumnCount = 2, RowCount = 6
+            Dock = DockStyle.Top, AutoSize = true, ColumnCount = 2, RowCount = 7
         };
         settingsLayout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         settingsLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
@@ -277,7 +293,9 @@ internal sealed class MainForm : Form
         actions.Controls.Add(save);
         settingsLayout.Controls.Add(actions, 0, 4);
         settingsLayout.SetColumnSpan(actions, 2);
-        settingsLayout.Controls.Add(clearDefault, 0, 5);
+        settingsLayout.Controls.Add(confirmSwitch, 0, 5);
+        settingsLayout.SetColumnSpan(confirmSwitch, 2);
+        settingsLayout.Controls.Add(clearDefault, 0, 6);
         settingsLayout.SetColumnSpan(clearDefault, 2);
         settingsTab.Controls.Add(settingsLayout);
         tabs.TabPages.Add(diagnosticTab);
@@ -343,6 +361,7 @@ internal sealed class MainForm : Form
         trayRefresh.Enabled = refresh.Enabled;
         diagnostics.Enabled = selected;
         save.Enabled = restore.Enabled = !busy && !exiting;
+        confirmSwitch.Enabled = !busy && !exiting;
         clearDefault.Enabled = !busy && preferences.DefaultMonitorId is not null;
         saveDefault.Visible = monitors.Items.Count > 1;
         saveDefault.Enabled = selected && monitor?.StableId is not null &&
@@ -467,7 +486,7 @@ internal sealed class MainForm : Form
     {
         SetStatus(monitors.Items.Count == 0 ? "No connected physical monitor found."
             : SelectedMonitor is null ? "Choose a monitor. No unique saved default is connected."
-            : "Ready to switch inputs.");
+            : "");
     }
 
     private Task DiagnosticsAsync()
@@ -518,12 +537,31 @@ internal sealed class MainForm : Form
         UpdateControls();
         try
         {
-            answer = MessageBox.Show(Visible ? this : null,
-                $"{selected.DisplayName}\r\n\r\nSwitch to {inputNames[index]} (VCP 0x60 = 0x{value:X4})?\r\n\r\n" +
-                "Odyssey input values may differ on other monitors. Switching may disconnect this PC. " +
-                "Use the monitor's Source control to return if needed.",
-                "Confirm input switch", MessageBoxButtons.YesNo, MessageBoxIcon.Question,
-                MessageBoxDefaultButton.Button2);
+            if (preferences.SuppressSwitchConfirmation)
+            {
+                answer = DialogResult.Yes;
+            }
+            else
+            {
+                var confirmation = ConfirmInputSwitch(selected, inputNames[index], value);
+                answer = confirmation.Result;
+                if (confirmation.SuppressFuture != preferences.SuppressSwitchConfirmation)
+                {
+                    var updated = new Preferences
+                    {
+                        DefaultMonitorId = preferences.DefaultMonitorId,
+                        SuppressSwitchConfirmation = confirmation.SuppressFuture
+                    };
+                    WriteSettings(PreferencesPath, updated);
+                    preferences = updated;
+                    Append("Saved input confirmation preference.");
+                }
+            }
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            ReportFailure(error);
+            return;
         }
         finally
         {
@@ -553,6 +591,82 @@ internal sealed class MainForm : Form
                 QueueRefresh("Input switch attempt completed");
             }
         });
+    }
+
+    private (DialogResult Result, bool SuppressFuture) ConfirmInputSwitch(
+        NativeMonitor monitor, string inputName, uint value)
+    {
+        using var dialog = new Form
+        {
+            Text = "Confirm input switch",
+            Font = Font,
+            BackColor = Color.White,
+            ForeColor = Ink,
+            AutoScaleMode = AutoScaleMode.Dpi,
+            ClientSize = new Size(460, 270),
+            MinimumSize = new Size(420, 270),
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            MaximizeBox = false,
+            MinimizeBox = false,
+            ShowInTaskbar = false,
+            StartPosition = Visible ? FormStartPosition.CenterParent : FormStartPosition.CenterScreen,
+            Icon = Icon
+        };
+        var content = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            Padding = new Padding(24),
+            ColumnCount = 1,
+            RowCount = 4
+        };
+        content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        content.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        content.Controls.Add(new Label
+        {
+            Text = $"Switch to {inputName}?",
+            Font = new Font(Font.FontFamily, 16, FontStyle.Bold),
+            AutoSize = true,
+            Margin = new Padding(0, 0, 0, 10)
+        }, 0, 0);
+        content.Controls.Add(new Label
+        {
+            Text = $"{monitor.DisplayName}\r\nVCP 0x60 = 0x{value:X4}\r\n\r\n" +
+                "Switching may disconnect this PC. Use the monitor's Source control to return if needed.",
+            AutoSize = true,
+            MaximumSize = new Size(400, 0),
+            ForeColor = status.ForeColor,
+            Margin = new Padding(0, 0, 0, 14)
+        }, 0, 1);
+        var suppress = new CheckBox
+        {
+            Text = "Do not show me this again",
+            AutoSize = true,
+            AccessibleName = "Do not show input switch confirmation again",
+            Margin = new Padding(0, 0, 0, 14)
+        };
+        content.Controls.Add(suppress, 0, 2);
+        var actions = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            FlowDirection = FlowDirection.RightToLeft,
+            Dock = DockStyle.Fill,
+            Margin = Padding.Empty
+        };
+        var yes = MakeButton("Switch", primary: true);
+        yes.DialogResult = DialogResult.Yes;
+        var no = MakeButton("Cancel");
+        no.DialogResult = DialogResult.No;
+        actions.Controls.Add(yes);
+        actions.Controls.Add(no);
+        content.Controls.Add(actions, 0, 3);
+        dialog.Controls.Add(content);
+        dialog.AcceptButton = no;
+        dialog.CancelButton = no;
+
+        DialogResult result = dialog.ShowDialog(Visible ? this : null);
+        return (result, suppress.Checked);
     }
 
     protected override void WndProc(ref Message message)
@@ -605,6 +719,10 @@ internal sealed class MainForm : Form
             preferences = new Preferences();
             ReportFailure(error);
         }
+        finally
+        {
+            confirmSwitch.Checked = !preferences.SuppressSwitchConfirmation;
+        }
     }
 
     private void ApplySettings(Dictionary<string, string> stored)
@@ -642,7 +760,11 @@ internal sealed class MainForm : Form
                     throw new InvalidOperationException("This monitor has no unique Windows interface identity. Select it manually.");
                 identity = monitor.StableId;
             }
-            var updated = new Preferences { DefaultMonitorId = identity };
+            var updated = new Preferences
+            {
+                DefaultMonitorId = identity,
+                SuppressSwitchConfirmation = preferences.SuppressSwitchConfirmation
+            };
             WriteSettings(PreferencesPath, updated);
             preferences = updated;
             Append(clear ? "Cleared the default monitor." : "Saved default monitor interface: " + identity);
@@ -673,6 +795,30 @@ internal sealed class MainForm : Form
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
+            ReportFailure(error);
+        }
+    }
+
+    private void SaveConfirmationPreference()
+    {
+        if (!initialized || confirmSwitch.Checked == !preferences.SuppressSwitchConfirmation)
+            return;
+        try
+        {
+            var updated = new Preferences
+            {
+                DefaultMonitorId = preferences.DefaultMonitorId,
+                SuppressSwitchConfirmation = !confirmSwitch.Checked
+            };
+            WriteSettings(PreferencesPath, updated);
+            preferences = updated;
+            Append(confirmSwitch.Checked
+                ? "Enabled input switch confirmations."
+                : "Disabled input switch confirmations.");
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            confirmSwitch.Checked = !preferences.SuppressSwitchConfirmation;
             ReportFailure(error);
         }
     }

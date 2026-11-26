@@ -85,10 +85,18 @@ Check(MonitorSelection.Choose(["second", "first"], "second") == 0, "Default surv
 Check(MonitorSelection.Choose(["first", "second"], "missing") == -1, "Do not fall back to another display when default is absent");
 Check(MonitorSelection.Choose(["same", "SAME"], "same") == -1, "Duplicate identities never select an arbitrary display");
 Check(MonitorSelection.FindUnique([null, "second"], "SECOND") == 1, "Windows interface identity matching is case-insensitive");
-var persisted = JsonSerializer.Serialize(new Preferences { DefaultMonitorId = "second" });
+var persisted = JsonSerializer.Serialize(new Preferences
+{
+    DefaultMonitorId = "second",
+    SuppressSwitchConfirmation = true
+});
 var restoredPreferences = JsonSerializer.Deserialize<Preferences>(persisted)!;
 Check(MonitorSelection.Choose(["second", "first"], restoredPreferences.DefaultMonitorId) == 0,
     "Persisted default is restored by identity rather than list position");
+Check(restoredPreferences.SuppressSwitchConfirmation,
+    "Input confirmation preference persists with monitor preferences");
+Check(!JsonSerializer.Deserialize<Preferences>("{}")!.SuppressSwitchConfirmation,
+    "Missing confirmation preference retains the warning by default");
 int releases = 0;
 var zeroHandle = new PhysicalMonitorHandle(0, handle =>
 {

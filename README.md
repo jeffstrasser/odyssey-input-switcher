@@ -22,10 +22,12 @@ Open `dist\win-x64\OdysseyInputSwitcher.exe` on an Intel/AMD x64 PC, or `dist\wi
 
 1. Connect the PC to the monitor using HDMI or DisplayPort. Keep the monitor awake and the PC's connection active. If the monitor has a DDC/CI setting, enable it; its presence on this exact model is not assumed.
 2. On startup, the app discovers physical monitors automatically. If there is **only one**, it selects that monitor. If there are **multiple**, it selects a uniquely matching saved default, or waits for you to choose from the monitor list. Click **Save as default** after selecting your preferred monitor to remember it.
-3. Click **DisplayPort**, **HDMI**, or **Micro HDMI**. The confirmation names the selected monitor and command; **No** is the default. Have the physical Source control available to recover before approving. The app sends one VCP `0x60` write, without a retry.
+3. Click **DisplayPort**, **HDMI**, or **Micro HDMI**. The confirmation names the selected monitor and command; **Cancel** is the default. Select **Do not show me this again** to save the preference and skip future confirmations. Have the physical Source control available to recover before approving. The app sends one VCP `0x60` write, without a retry.
 4. Open **Advanced...** for diagnostics and input settings. The main window intentionally shows only monitor selection, input buttons, and a short status.
 
 Discovery refreshes automatically after input-switch attempts, display-topology changes, and Windows resume. Rapid changes are debounced; discovery waits for any outstanding monitor operation before replacing its handles. **Refresh** is also available manually. Refreshing and selecting never send input commands.
+
+The main window can be resized, and the app uses per-monitor DPI scaling when moved between displays. The Advanced window opens centered over the main window and can be resized independently.
 
 ## System tray
 
@@ -37,11 +39,11 @@ The app's monitor icon appears in the Windows notification area while running (p
 
 The **Diagnostics** tab contains the detailed log, process architecture, selected display, Windows monitor-interface identity, and saved default. **Read monitor diagnostics** reads VCP `0x60` and the raw capabilities string; each read's error is shown independently. A current value or `60(...)` capabilities list does not prove a working write mapping. No diagnostic read happens automatically during refresh.
 
-In **Inputs & default monitor**, use the preloaded DisplayPort `0x0F`, HDMI `0x05`, and Micro HDMI `0x06` values for the owner's tested setup. Blank old settings are filled from that mapping on launch. For different nonblank old values, click **Use working Odyssey values**, then **Save input values**. This only updates settings; it does not switch anything. Values remain editable in decimal or `0x` hexadecimal, from 0 through 65535. The numeric range does not mean all values are supported. Do not systematically try values or substitute conventional HDMI `0x11`/`0x12` for this working mapping.
+In **Inputs & default monitor**, use the preloaded DisplayPort `0x0F`, HDMI `0x05`, and Micro HDMI `0x06` values for the owner's tested setup. Blank old settings are filled from that mapping on launch. For different nonblank old values, click **Use working Odyssey values**, then **Save input values**. This only updates settings; it does not switch anything. Use **Ask before switching inputs** to turn the confirmation back on after opting out. Values remain editable in decimal or `0x` hexadecimal, from 0 through 65535. The numeric range does not mean all values are supported. Do not systematically try values or substitute conventional HDMI `0x11`/`0x12` for this working mapping.
 
 Input mappings are stored in `%LOCALAPPDATA%\OdysseyInputSwitcher\inputs.json`. Nonblank custom values are preserved; missing or blank saved values are treated as unconfigured. Clearing a field disables its main-window and tray switch until it is filled or the app restarts. Mappings are user-wide, not tied to a monitor identity.
 
-The default monitor is stored separately in `%LOCALAPPDATA%\OdysseyInputSwitcher\preferences.json`. Defaults match a unique Windows monitor-interface identity, **not the first list position**, display number, or generic description. If the saved default disappears while multiple monitors remain, none is selected automatically. **Clear default monitor** removes the preference. Changing ports/drivers may change Windows' interface identity and require saving the default again. Mirrored displays or drivers that do not expose an unambiguous physical-monitor identity cannot be saved as defaults; select those manually. A sole connected monitor is still selected automatically, even if a different default was saved.
+The default monitor and input-confirmation preference are stored in `%LOCALAPPDATA%\OdysseyInputSwitcher\preferences.json`. Defaults match a unique Windows monitor-interface identity, **not the first list position**, display number, or generic description. If the saved default disappears while multiple monitors remain, none is selected automatically. **Clear default monitor** removes the monitor preference. Changing ports/drivers may change Windows' interface identity and require saving the default again. Mirrored displays or drivers that do not expose an unambiguous physical-monitor identity cannot be saved as defaults; select those manually. A sole connected monitor is still selected automatically, even if a different default was saved.
 
 The app does not write on startup, automatically switch after discovery, brute-force input values, change brightness/power, or control all displays.
 
@@ -68,7 +70,7 @@ dotnet publish OdysseyInputSwitcher.csproj -c Release -r win-x64 --self-containe
 dotnet publish OdysseyInputSwitcher.csproj -c Release -r win-arm64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishTrimmed=false -o dist\win-arm64
 ```
 
-Cross-publishing ARM64 on an x64 PC is supported; it does not prove ARM64 execution. The hardware-free tests cover value parsing, saved-value overrides and preset restoration, sole-monitor selection, missing/duplicate/reordered default identities, default preference serialization, single-write/no-readback behavior, write failures without retries, native interop structure sizes, and exactly-once release of valid zero-valued physical-monitor handles. Physical switching and native ARM64 execution need the corresponding hardware.
+Cross-publishing ARM64 on an x64 PC is supported; it does not prove ARM64 execution. The hardware-free tests cover value parsing, saved-value overrides and preset restoration, sole-monitor selection, missing/duplicate/reordered default identities, monitor and confirmation preference serialization, single-write/no-readback behavior, write failures without retries, native interop structure sizes, and exactly-once release of valid zero-valued physical-monitor handles. Physical switching and native ARM64 execution need the corresponding hardware.
 
 The working mapping is confirmed by the owner's testing of the supplied app, not by sending commands during development. Local x64 UI validation does not prove native ARM64 execution or physical switching with this revised build.
 
