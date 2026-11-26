@@ -1,6 +1,16 @@
 using System.Runtime.InteropServices;
+using System.IO.Compression;
+using System.Security.Cryptography;
 using System.Text.Json;
 using OdysseyInputSwitcher;
+
+// A harmless restart target for the published installer's end-to-end smoke test.
+if (args.Length == 3 && args[0] == "--cleanup-update")
+{
+    UpdateInstaller.Cleanup(int.Parse(args[1]), args[2]);
+    File.WriteAllText(Environment.ProcessPath + ".restarted", "Restart and cleanup succeeded.");
+    return;
+}
 
 int assertions = 0;
 void Check(bool passed, string description)
@@ -108,7 +118,147 @@ Check(!zeroHandle.IsInvalid, "Zero is a valid physical-monitor handle");
 zeroHandle.Dispose();
 zeroHandle.Dispose();
 Check(releases == 1, "Release even a zero handle exactly once");
+
+void Reject<T>(Action action, string description) where T : Exception
+{
+    try { action(); Check(false, description); }
+    catch (T) { Check(true, description); }
+}
+string ReleaseJson(string tag = "v1.3.0", bool prerelease = false, bool draft = false,
+    string? digest = null, string? url = null, string runtime = "win-x64") =>
+    JsonSerializer.Serialize(new
+    {
+        tag_name = tag, draft, prerelease,
+        assets = new[] { new
+        {
+            name = $"OdysseyInputSwitcher-{runtime}.zip",
+            browser_download_url = url ?? $"{ReleaseUpdater.RepositoryUrl}/releases/download/{tag}/OdysseyInputSwitcher-{runtime}.zip",
+            digest = digest ?? "sha256:" + new string('a', 64)
+        } }
+    });
+var current = new Version(1, 2, 0, 0);
+Check(ReleaseUpdater.ParseRelease(ReleaseJson(), current, Architecture.X64)?.Version == new Version(1, 3, 0, 0),
+    "Offer a newer stable release with normalized version components");
+Check(ReleaseUpdater.ParseRelease(ReleaseJson(runtime: "win-arm64"), current, Architecture.Arm64)!
+    .DownloadUrl.AbsolutePath.EndsWith("OdysseyInputSwitcher-win-arm64.zip"), "Select native ARM64 asset");
+foreach (string tag in new[] { "v1.2.0", "1.2.0.0", "v1.1.0" })
+    Check(ReleaseUpdater.ParseRelease(ReleaseJson(tag), current, Architecture.X64) is null,
+        "Do not offer current or older release " + tag);
+Check(ReleaseUpdater.ParseRelease(ReleaseJson(prerelease: true), current, Architecture.X64) is null,
+    "Do not offer prereleases");
+Check(ReleaseUpdater.ParseRelease(ReleaseJson(draft: true), current, Architecture.X64) is null,
+    "Do not offer drafts");
+Reject<InvalidDataException>(() => ReleaseUpdater.ParseRelease(ReleaseJson("v2.0.0-beta"), current, Architecture.X64),
+    "Reject non-stable version tag");
+Reject<InvalidDataException>(() => ReleaseUpdater.ParseRelease(ReleaseJson(digest: ""), current, Architecture.X64),
+    "Reject missing digest rather than silently skipping verification");
+Reject<InvalidDataException>(() => ReleaseUpdater.ParseRelease(ReleaseJson(url: "https://example.com/update.zip"), current, Architecture.X64),
+    "Reject assets outside the repository");
+Reject<InvalidDataException>(() => ReleaseUpdater.ParseRelease(ReleaseJson(), current, Architecture.Arm64),
+    "Reject missing matching architecture instead of installing x64 on ARM64");
+Reject<PlatformNotSupportedException>(() => ReleaseUpdater.ParseRelease(ReleaseJson(), current, Architecture.X86),
+    "Reject unsupported process architectures");
+string testDirectory = UpdateInstaller.CreateDirectory();
+try
+{
+    UpdateInstaller.ValidateDirectory(testDirectory);
+    if (!ReleaseUpdater.IsSingleFileBuild())
+        Reject<InvalidOperationException>(() => ReleaseUpdater.StartInstaller(testDirectory),
+            "Source apphosts cannot be copied as standalone installers");
+    Reject<InvalidDataException>(() => UpdateInstaller.ValidateDirectory(Path.GetTempPath()),
+        "Reject cleanup of arbitrary directories");
+    string archivePath = Path.Combine(testDirectory, "test.zip");
+    void MakeArchive(params (string Name, byte[] Bytes)[] entries)
+    {
+        File.Delete(archivePath);
+        using var archive = ZipFile.Open(archivePath, ZipArchiveMode.Create);
+        foreach (var entry in entries)
+        {
+            using var stream = archive.CreateEntry(entry.Name).Open();
+            stream.Write(entry.Bytes);
+        }
+    }
+    byte[] executable = [(byte)'M', (byte)'Z', 1, 2];
+    MakeArchive((ReleaseUpdater.ExecutableName, executable), ("../escaped.exe", executable));
+    string payload = Path.Combine(testDirectory, "payload.exe");
+    ReleaseUpdater.ExtractExecutable(archivePath, payload);
+    Check(File.ReadAllBytes(payload).SequenceEqual(executable), "Extract exactly the root executable");
+    Check(!File.Exists(Path.Combine(Path.GetDirectoryName(testDirectory)!, "escaped.exe")),
+        "Ignore traversal entries instead of extracting them");
+    File.Delete(payload);
+    MakeArchive(("nested/" + ReleaseUpdater.ExecutableName, executable));
+    Reject<InvalidDataException>(() => ReleaseUpdater.ExtractExecutable(archivePath, payload),
+        "Reject packages missing the root executable");
+    MakeArchive((ReleaseUpdater.ExecutableName, executable), (ReleaseUpdater.ExecutableName, executable));
+    Reject<InvalidDataException>(() => ReleaseUpdater.ExtractExecutable(archivePath, payload),
+        "Reject duplicate executable entries");
+    MakeArchive((ReleaseUpdater.ExecutableName, [1, 2, 3]));
+    Reject<InvalidDataException>(() => ReleaseUpdater.ExtractExecutable(archivePath, payload),
+        "Reject non-executable payload");
+    File.Delete(payload);
+    MakeArchive((ReleaseUpdater.ExecutableName, executable));
+    byte[] zipBytes = File.ReadAllBytes(archivePath);
+    var update = new ReleaseUpdate(new Version(1, 3, 0), new Uri(ReleaseUpdater.RepositoryUrl),
+        Convert.ToHexString(SHA256.HashData(zipBytes)));
+    using (var updater = new ReleaseUpdater(new HttpClient(new ArchiveHandler(zipBytes))))
+    {
+        string staged = await updater.StageAsync(update, CancellationToken.None);
+        try
+        {
+            Check(File.ReadAllBytes(Path.Combine(staged, "payload.exe")).SequenceEqual(executable),
+                "Stage only SHA-256-verified bytes");
+        }
+        finally { Directory.Delete(staged, recursive: true); }
+        try
+        {
+            await updater.StageAsync(update with { Sha256 = new string('0', 64) }, CancellationToken.None);
+            Check(false, "Reject tampered download");
+        }
+        catch (InvalidDataException) { Check(true, "Reject tampered download"); }
+        using var canceled = new CancellationTokenSource();
+        canceled.Cancel();
+        try
+        {
+            await updater.StageAsync(update, canceled.Token);
+            Check(false, "Cancel update staging");
+        }
+        catch (OperationCanceledException) { Check(true, "Cancel update staging"); }
+    }
+    string target = Path.Combine(testDirectory, "installed.exe");
+    string backup = target + ".update-backup";
+    File.WriteAllText(target, "old");
+    File.WriteAllText(payload, "new");
+    UpdateInstaller.ReplaceExecutable(payload, target, backup);
+    Check(File.ReadAllText(target) == "new" && File.ReadAllText(backup) == "old",
+        "Atomic replacement keeps previous executable for rollback");
+    Check(!File.Exists(target + ".update-new"), "Replacement removes temporary adjacent file");
+    Reject<IOException>(() => UpdateInstaller.ReplaceExecutable(payload, target, backup),
+        "Do not overwrite an unresolved backup");
+    File.Move(backup, target, overwrite: true);
+    using (var locked = new FileStream(target, FileMode.Open, FileAccess.Read, FileShare.Read))
+        Reject<IOException>(() => UpdateInstaller.ReplaceExecutable(payload, target, backup),
+            "Locked installation fails instead of corrupting existing executable");
+    Check(File.ReadAllText(target) == "old" && !File.Exists(target + ".update-new"),
+        "Failed replacement leaves original executable and cleans adjacent file");
+    Reject<System.ComponentModel.Win32Exception>(() => UpdateInstaller.Apply(int.MaxValue, target, testDirectory),
+        "Restarting an invalid executable fails explicitly");
+    Check(File.ReadAllText(target) == "old" && !File.Exists(backup),
+        "Failed process restart rolls back the previous executable");
+}
+finally { Directory.Delete(testDirectory, recursive: true); }
 Console.WriteLine($"PASS: {assertions} hardware-free assertions. No monitor API calls or writes.");
+
+internal sealed class ArchiveHandler(byte[] bytes) : HttpMessageHandler
+{
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent(bytes)
+        });
+    }
+}
 
 internal sealed class FakeMonitor : IMonitorConnection
 {

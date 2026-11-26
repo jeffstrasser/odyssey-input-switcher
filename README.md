@@ -35,6 +35,16 @@ The app's monitor icon appears in the Windows notification area while running (p
 
 **Run in tray**, minimizing, or closing the main window hides it without stopping the app. Double-click the tray icon or choose **Show Odyssey** to reopen it. Choose **Exit** from the tray menu to stop the app and release its monitor handles. Exiting waits for an outstanding monitor call or confirmation. This does not install a service or enable launch at Windows sign-in.
 
+## Updates
+
+On launch, Odyssey checks the [latest stable GitHub release](https://github.com/jeffstrasser/odyssey-input-switcher/releases/latest) and asks before downloading a newer version. **No** is the default. You can retry using **Check for updates...** in the tray menu. Drafts and prereleases are not offered; network errors and GitHub rate limits are reported without preventing monitor use.
+
+If you approve, the app downloads the ZIP for its running process architecture (x64 or ARM64), verifies the SHA-256 digest supplied by GitHub, stages only the application executable, and closes before replacing it. A temporary copy of the old app performs the replacement and restarts Odyssey. A backup is retained until restart succeeds, and restored if starting the new process fails. Temporary installer files are removed by the restarted app. Failed installs report their error; a retained `.update-backup` must be preserved or moved before retrying. Starting a process is not a guarantee that the new app will remain healthy.
+
+In-place upgrades require the **published single-file release** in a writable directory. Protected installation folders, other running copies, or antivirus locks can prevent replacement; the app does not request elevation. Source builds cannot self-install. Saved input and monitor preferences remain unchanged. Packages are unsigned: the digest verifies the downloaded archive against GitHub metadata, not independent publisher identity. Old versions without this feature require one manual upgrade first.
+
+Release tags must be `vMAJOR.MINOR.PATCH` (or the same without `v`), with matching `OdysseyInputSwitcher-win-x64.zip` / `OdysseyInputSwitcher-win-arm64.zip` assets and GitHub SHA-256 digests. Publish with `.\build.ps1 -Version MAJOR.MINOR.PATCH` so the executable version matches the tag. The source version defaults to 1.2.0. Do not reuse version numbers.
+
 ## Advanced and saved settings
 
 The **Diagnostics** tab contains the detailed log, process architecture, selected display, Windows monitor-interface identity, and saved default. **Read monitor diagnostics** reads VCP `0x60` and the raw capabilities string; each read's error is shown independently. A current value or `60(...)` capabilities list does not prove a working write mapping. No diagnostic read happens automatically during refresh.
@@ -71,6 +81,8 @@ dotnet publish OdysseyInputSwitcher.csproj -c Release -r win-arm64 --self-contai
 ```
 
 Cross-publishing ARM64 on an x64 PC is supported; it does not prove ARM64 execution. The hardware-free tests cover value parsing, saved-value overrides and preset restoration, sole-monitor selection, missing/duplicate/reordered default identities, monitor and confirmation preference serialization, single-write/no-readback behavior, write failures without retries, native interop structure sizes, and exactly-once release of valid zero-valued physical-monitor handles. Physical switching and native ARM64 execution need the corresponding hardware.
+
+Update tests cover version comparison, architecture-specific release selection, invalid metadata, digest mismatch, cancellation, safe ZIP extraction, executable replacement, locks, and restart-failure rollback. After running the Release tests and publishing x64, `.\tests\UpdateSmoke.ps1 -PublishedExecutable .\dist\win-x64\OdysseyInputSwitcher.exe` exercises the real published installer with a harmless test executable, including restart and staging cleanup. Run that smoke test on x64 Windows; it never starts the monitor UI or invokes monitor APIs.
 
 The working mapping is confirmed by the owner's testing of the supplied app, not by sending commands during development. Local x64 UI validation does not prove native ARM64 execution or physical switching with this revised build.
 

@@ -41,6 +41,8 @@ internal sealed class MainForm : Form
     private readonly ToolStripMenuItem[] trayInputs = new ToolStripMenuItem[3];
     private readonly ToolStripMenuItem trayMonitor = new("Discovering monitors...") { Enabled = false };
     private readonly ToolStripMenuItem trayRefresh = new("Refresh monitors");
+    private readonly ToolStripMenuItem trayUpdate = new("Check for updates...");
+    private readonly CancellationTokenSource updateCancellation = new();
     private readonly NotifyIcon tray = new();
     private readonly ContextMenuStrip trayMenu = new();
     private readonly System.Windows.Forms.Timer refreshTimer = new() { Interval = 650 };
@@ -112,11 +114,12 @@ internal sealed class MainForm : Form
             refreshPending = false;
             await RefreshAsync();
         };
-        Shown += (_, _) =>
+        Shown += async (_, _) =>
         {
             initialized = true;
             LoadSettings();
             LoadPreferences();
+            await CheckForUpdatesAsync(manual: false);
             QueueRefresh("Startup");
         };
         Resize += (_, _) =>
@@ -143,7 +146,7 @@ internal sealed class MainForm : Form
             {
                 e.Cancel = true;
                 closeWhenIdle = true;
-                SetStatus("Waiting for the current monitor call before exiting...");
+                SetStatus("Waiting for the current operation before exiting...");
             }
         };
         UpdateControls();
@@ -319,6 +322,8 @@ internal sealed class MainForm : Form
         trayRefresh.Click += (_, _) => QueueRefresh("Tray refresh");
         trayMenu.Items.Add(trayRefresh);
         trayMenu.Items.Add("Advanced...", null, (_, _) => ShowAdvanced());
+        trayUpdate.Click += async (_, _) => await CheckForUpdatesAsync(manual: true);
+        trayMenu.Items.Add(trayUpdate);
         trayMenu.Items.Add("Exit", null, (_, _) => ExitApplication());
         trayMenu.Opening += (_, _) => UpdateControls();
         tray.Icon = Icon;
@@ -345,6 +350,7 @@ internal sealed class MainForm : Form
     private void ExitApplication()
     {
         exiting = true;
+        updateCancellation.Cancel();
         refreshTimer.Stop();
         refreshPending = false;
         Close();
@@ -359,6 +365,7 @@ internal sealed class MainForm : Form
         monitors.Enabled = !busy && !stale;
         refresh.Enabled = !busy && !exiting;
         trayRefresh.Enabled = refresh.Enabled;
+        trayUpdate.Enabled = !busy && !confirming && !exiting;
         diagnostics.Enabled = selected;
         save.Enabled = restore.Enabled = !busy && !exiting;
         confirmSwitch.Enabled = !busy && !exiting;
@@ -391,6 +398,89 @@ internal sealed class MainForm : Form
 
     private string?[] CurrentIdentities() =>
         inventory?.Monitors.Select(monitor => monitor.StableId).ToArray() ?? [];
+
+    private async Task CheckForUpdatesAsync(bool manual)
+    {
+        if (busy || confirming || exiting)
+            return;
+        await RunAsync(async () =>
+        {
+            string? stagedDirectory = null;
+            bool installerStarted = false;
+            bool approved = false;
+            try
+            {
+                SetStatus("Checking for updates...");
+                using var updater = new ReleaseUpdater();
+                var update = await updater.CheckAsync(updateCancellation.Token);
+                if (exiting)
+                    return;
+                if (update is null)
+                {
+                    Append($"No newer stable release. Installed version: {ReleaseUpdater.CurrentVersion}.");
+                    SetStatus("No newer stable release is available.");
+                    if (manual)
+                        MessageBox.Show(this, "No newer stable release is available.",
+                            "Odyssey updates", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+                ShowMainWindow();
+                if (MessageBox.Show(this,
+                    $"Version {update.Version} is available (installed: {ReleaseUpdater.CurrentVersion}).\r\n\r\n" +
+                    "Download and install it now? Odyssey will close and restart. Your settings will be kept.",
+                    "Odyssey update available", MessageBoxButtons.YesNo, MessageBoxIcon.Question,
+                    MessageBoxDefaultButton.Button2) != DialogResult.Yes || exiting)
+                {
+                    SetStatus("Update declined. Use the tray menu to check again.");
+                    return;
+                }
+                approved = true;
+                if (!ReleaseUpdater.IsSingleFileBuild())
+                    throw new InvalidOperationException("In-place upgrades require a published single-file release. " +
+                        "Download one from " + ReleaseUpdater.RepositoryUrl + "/releases/latest.");
+                SetStatus("Downloading and verifying the update...");
+                stagedDirectory = await updater.StageAsync(update, updateCancellation.Token);
+                if (exiting)
+                    return;
+                ReleaseUpdater.StartInstaller(stagedDirectory);
+                installerStarted = true;
+                Append($"Installing version {update.Version}; restarting Odyssey.");
+                ExitApplication();
+            }
+            catch (OperationCanceledException) when (updateCancellation.IsCancellationRequested)
+            {
+                Append("Update canceled because the app is exiting.");
+            }
+            catch (Exception error)
+            {
+                Append("Update failed: " + error);
+                SetStatus("Update failed. Your installed version has not been changed.");
+                if (!exiting)
+                {
+                    if (manual || approved)
+                        MessageBox.Show(this, error.Message, "Odyssey update failed",
+                            MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    else
+                        tray.ShowBalloonTip(5000, "Update check failed",
+                            error.Message + " Use Check for updates to retry.", ToolTipIcon.Warning);
+                }
+            }
+            finally
+            {
+                if (stagedDirectory is not null && !installerStarted)
+                {
+                    try { Directory.Delete(stagedDirectory, recursive: true); }
+                    catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+                    {
+                        Append("Update staging cleanup failed: " + error);
+                        if (!exiting)
+                            MessageBox.Show(this, "Temporary update files could not be removed:\r\n" + error.Message,
+                                "Odyssey update cleanup failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    }
+                }
+            }
+        });
+    }
 
     private void Append(string message) => log.AppendText($"[{DateTime.Now:HH:mm:ss}] {message}\r\n");
     private void SetStatus(string message) => status.Text = message;
@@ -829,6 +919,8 @@ internal sealed class MainForm : Form
         {
             resourcesDisposed = true;
             exiting = true;
+            updateCancellation.Cancel();
+            updateCancellation.Dispose();
             refreshTimer.Dispose();
             ReleaseInventory(logMessages: false);
             tray.Visible = false;

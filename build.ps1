@@ -1,6 +1,8 @@
 param(
     [ValidateSet('win-x64', 'win-arm64', 'all')]
-    [string]$Architecture = 'all'
+    [string]$Architecture = 'all',
+    [ValidatePattern('^\d+\.\d+\.\d+$')]
+    [string]$Version = '1.2.0'
 )
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
@@ -19,7 +21,7 @@ if ($Architecture -eq 'all') { $targets = @('win-x64', 'win-arm64') }
 foreach ($target in $targets) {
     & $dotnet publish 'OdysseyInputSwitcher.csproj' -c Release -r $target --self-contained true `
         -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true `
-        -p:PublishTrimmed=false "-p:OutputPath=bin\Publish\$target\" -o "dist\$target"
+        -p:PublishTrimmed=false "-p:Version=$Version" "-p:OutputPath=bin\Publish\$target\" -o "dist\$target"
     if ($LASTEXITCODE -ne 0) { throw "Publish failed: $target" }
     Copy-Item 'README.md' "dist\$target\README.md"
     Compress-Archive -LiteralPath "dist\$target\OdysseyInputSwitcher.exe", "dist\$target\README.md" `
