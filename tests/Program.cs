@@ -159,12 +159,23 @@ Reject<InvalidDataException>(() => ReleaseUpdater.ParseRelease(ReleaseJson(), cu
 Reject<PlatformNotSupportedException>(() => ReleaseUpdater.ParseRelease(ReleaseJson(), current, Architecture.X86),
     "Reject unsupported process architectures");
 string testDirectory = UpdateInstaller.CreateDirectory();
+Check(StartupRegistration.CreateCommand(@"C:\Program Files\Odyssey\Input Switcher.exe") ==
+    "\"C:\\Program Files\\Odyssey\\Input Switcher.exe\" --tray",
+    "Startup command quotes paths with spaces and launches directly in tray mode");
+Reject<ArgumentException>(() => StartupRegistration.CreateCommand("relative.exe"),
+    "Reject relative startup paths");
+Reject<ArgumentException>(() => StartupRegistration.CreateCommand("C:\\bad\"path.exe"),
+    "Reject quotes that could corrupt the startup command");
 try
 {
     UpdateInstaller.ValidateDirectory(testDirectory);
     if (!ReleaseUpdater.IsSingleFileBuild())
+    {
         Reject<InvalidOperationException>(() => ReleaseUpdater.StartInstaller(testDirectory),
             "Source apphosts cannot be copied as standalone installers");
+        Reject<InvalidOperationException>(() => StartupRegistration.SetEnabled(true),
+            "Development builds reject startup registration before writing the registry");
+    }
     Reject<InvalidDataException>(() => UpdateInstaller.ValidateDirectory(Path.GetTempPath()),
         "Reject cleanup of arbitrary directories");
     string archivePath = Path.Combine(testDirectory, "test.zip");
@@ -252,6 +263,19 @@ var layoutThread = new Thread(() =>
     try
     {
         Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
+        using (var hidden = new MainForm(startInTray: true))
+        {
+            hidden.Show();
+            Check(!hidden.Visible && hidden.IsHandleCreated,
+                "Tray startup creates the message-loop handle without showing the main window");
+            var notify = (NotifyIcon)typeof(MainForm).GetField("tray",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(hidden)!;
+            Check(notify.Visible, "Tray startup exposes its notification icon");
+            typeof(MainForm).GetMethod("ShowMainWindow",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.Invoke(hidden, null);
+            Check(hidden.Visible, "Showing Odyssey exits hidden-startup mode");
+            hidden.Hide();
+        }
         using var main = new MainForm();
         Check(main.FormBorderStyle == FormBorderStyle.FixedSingle && !main.MaximizeBox,
             "Main window cannot be manually resized or maximized");

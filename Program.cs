@@ -6,7 +6,8 @@ internal static class Program
     private static void Main(string[] args)
     {
         ApplicationConfiguration.Initialize();
-        if (args.Length > 0)
+        bool startInTray = args.Length == 1 && args[0] == "--tray";
+        if (args.Length > 0 && !startInTray)
         {
             try
             {
@@ -29,6 +30,6 @@ internal static class Program
                     return;
             }
         }
-        Application.Run(new MainForm());
+        Application.Run(new MainForm(startInTray));
     }
 }
