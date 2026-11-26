@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.IO.Compression;
 using System.Net;
+using System.Reflection.PortableExecutable;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -117,6 +118,8 @@ internal sealed class ReleaseUpdater : IDisposable
             }
             await Task.Run(() => ExtractExecutable(archivePath, Path.Combine(directory, "payload.exe")),
                 cancellationToken);
+            ValidateExecutable(Path.Combine(directory, "payload.exe"), update.Version,
+                RuntimeInformation.ProcessArchitecture);
             cancellationToken.ThrowIfCancellationRequested();
             File.Delete(archivePath);
             return directory;
@@ -162,6 +165,39 @@ internal sealed class ReleaseUpdater : IDisposable
             start.ArgumentList.Add(argument);
         using var process = Process.Start(start)
             ?? throw new InvalidOperationException("The update installer could not be started.");
+    }
+
+    internal static void ValidateExecutable(string path, Version expectedVersion, Architecture architecture)
+    {
+        Machine expectedMachine = architecture switch
+        {
+            Architecture.X64 => Machine.Amd64,
+            Architecture.Arm64 => Machine.Arm64,
+            _ => throw new PlatformNotSupportedException("Updates support x64 and ARM64 processes only.")
+        };
+        try
+        {
+            using var stream = File.OpenRead(path);
+            using var reader = new PEReader(stream);
+            var headers = reader.PEHeaders;
+            if (headers.PEHeader is null || headers.PEHeader.Magic != PEMagic.PE32Plus ||
+                !headers.CoffHeader.Characteristics.HasFlag(Characteristics.ExecutableImage) ||
+                headers.CoffHeader.Characteristics.HasFlag(Characteristics.Dll) ||
+                headers.SectionHeaders.Length == 0 ||
+                headers.SectionHeaders.Any(section => section.PointerToRawData < 0 || section.SizeOfRawData < 0 ||
+                    (long)section.PointerToRawData + section.SizeOfRawData > stream.Length))
+                throw new InvalidDataException("The update payload is not a complete Windows executable.");
+            if (headers.CoffHeader.Machine != expectedMachine)
+                throw new InvalidDataException("The update executable architecture does not match this app.");
+        }
+        catch (BadImageFormatException error)
+        {
+            throw new InvalidDataException("The update payload has invalid Windows executable headers.", error);
+        }
+        var info = FileVersionInfo.GetVersionInfo(path);
+        var actualVersion = new Version(info.FileMajorPart, info.FileMinorPart, info.FileBuildPart, info.FilePrivatePart);
+        if (actualVersion != NormalizeVersion(expectedVersion))
+            throw new InvalidDataException($"The update executable version {actualVersion} does not match release {expectedVersion}.");
     }
 
     [UnconditionalSuppressMessage("SingleFile", "IL3000",

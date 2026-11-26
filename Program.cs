@@ -7,6 +7,8 @@ internal static class Program
     {
         ApplicationConfiguration.Initialize();
         bool startInTray = args.Length == 1 && args[0] == "--tray";
+        string? updateDirectory = null;
+        int updateHelperId = 0;
         if (args.Length > 0 && !startInTray)
         {
             try
@@ -17,7 +19,11 @@ internal static class Program
                     return;
                 }
                 if (args.Length == 3 && args[0] == "--cleanup-update" && int.TryParse(args[1], out int helperId))
-                    UpdateInstaller.Cleanup(helperId, args[2]);
+                {
+                    UpdateInstaller.ValidateDirectory(args[2]);
+                    updateDirectory = args[2];
+                    updateHelperId = helperId;
+                }
                 else
                     throw new ArgumentException("Unrecognized application arguments.");
             }
@@ -30,6 +36,23 @@ internal static class Program
                     return;
             }
         }
-        Application.Run(new MainForm(startInTray));
+        using var form = new MainForm(startInTray);
+        if (updateDirectory is not null)
+        {
+            form.InitializationCompleted += async (_, _) =>
+            {
+                try
+                {
+                    UpdateInstaller.SignalReady(updateDirectory);
+                    await Task.Run(() => UpdateInstaller.Cleanup(updateHelperId, updateDirectory));
+                }
+                catch (Exception error)
+                {
+                    MessageBox.Show(form, error.Message, "Odyssey update cleanup failed",
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+            };
+        }
+        Application.Run(form);
     }
 }

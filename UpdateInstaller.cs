@@ -42,23 +42,65 @@ internal static class UpdateInstaller
             !Path.GetExtension(target).Equals(".exe", StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException("Invalid application executable path.");
         WaitForExit(parentId);
+        File.Delete(Path.Combine(directory, "ready"));
         string backup = target + ".update-backup";
         ReplaceExecutable(Path.Combine(directory, "payload.exe"), target, backup);
+        Process? process = null;
         try
         {
             var start = new ProcessStartInfo(target) { UseShellExecute = false };
             start.ArgumentList.Add("--cleanup-update");
             start.ArgumentList.Add(Environment.ProcessId.ToString());
             start.ArgumentList.Add(directory);
-            using var process = Process.Start(start)
+            process = Process.Start(start)
                 ?? throw new InvalidOperationException("The updated app could not be restarted.");
+            WaitForReady(process, directory, TimeSpan.FromSeconds(120));
         }
-        catch
+        catch (Exception error)
         {
-            File.Move(backup, target, overwrite: true);
+            try
+            {
+                if (process is not null && !process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                    if (!process.WaitForExit(5000))
+                        throw new TimeoutException("The failed update process could not be stopped for rollback.");
+                }
+                File.Move(backup, target, overwrite: true);
+            }
+            catch (Exception rollbackError)
+            {
+                throw new AggregateException("Update initialization failed and rollback could not complete. " +
+                    "Keep the backup at " + backup + ".", error, rollbackError);
+            }
             throw;
         }
+        finally { process?.Dispose(); }
         File.Delete(backup);
+    }
+
+    internal static void SignalReady(string directory)
+    {
+        ValidateDirectory(directory);
+        string marker = Path.Combine(directory, "ready");
+        File.WriteAllText(marker + ".tmp", Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        File.Move(marker + ".tmp", marker, overwrite: true);
+    }
+
+    internal static void WaitForReady(Process process, string directory, TimeSpan timeout)
+    {
+        var elapsed = Stopwatch.StartNew();
+        string marker = Path.Combine(directory, "ready");
+        string expected = process.Id.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        while (elapsed.Elapsed < timeout)
+        {
+            if (process.HasExited)
+                throw new InvalidOperationException("The updated app exited before initialization completed. The previous executable will be restored.");
+            if (File.Exists(marker) && File.ReadAllText(marker) == expected)
+                return;
+            process.WaitForExit(100);
+        }
+        throw new TimeoutException("The updated app did not confirm initialization within two minutes. The previous executable will be restored.");
     }
 
     internal static void ReplaceExecutable(string payload, string target, string backup)

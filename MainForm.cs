@@ -75,6 +75,7 @@ internal sealed class MainForm : Form
     private static string SettingsPath => Path.Combine(SettingsDirectory, "inputs.json");
     private static string PreferencesPath => Path.Combine(SettingsDirectory, "preferences.json");
     private NativeMonitor? SelectedMonitor => !stale ? monitors.SelectedItem as NativeMonitor : null;
+    internal event EventHandler? InitializationCompleted;
 
     internal MainForm(bool startInTray = false)
     {
@@ -190,6 +191,7 @@ internal sealed class MainForm : Form
             LoadSettings();
             LoadPreferences();
             RefreshStartupSetting();
+            InitializationCompleted?.Invoke(this, EventArgs.Empty);
             await CheckForUpdatesAsync(manual: false);
             QueueRefresh("Startup");
         });

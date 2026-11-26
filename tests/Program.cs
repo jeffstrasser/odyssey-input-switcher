@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Diagnostics;
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -7,8 +8,29 @@ using OdysseyInputSwitcher;
 // A harmless restart target for the published installer's end-to-end smoke test.
 if (args.Length == 3 && args[0] == "--cleanup-update")
 {
+    if (File.Exists(Path.Combine(args[2], "crash-before-ready")))
+        Environment.Exit(23);
+    UpdateInstaller.SignalReady(args[2]);
     UpdateInstaller.Cleanup(int.Parse(args[1]), args[2]);
     File.WriteAllText(Environment.ProcessPath + ".restarted", "Restart and cleanup succeeded.");
+    return;
+}
+
+if (args.Length == 4 && args[0] == "--verify-package")
+{
+    string staged = UpdateInstaller.CreateDirectory();
+    try
+    {
+        using (var archive = ZipFile.OpenRead(args[1]))
+            if (!archive.Entries.Select(entry => entry.FullName).Order()
+                .SequenceEqual(new[] { ReleaseUpdater.ExecutableName, "README.md" }.Order()))
+                throw new InvalidDataException("The release ZIP must contain exactly the app executable and README at its root.");
+        string executable = Path.Combine(staged, "payload.exe");
+        ReleaseUpdater.ExtractExecutable(args[1], executable);
+        ReleaseUpdater.ValidateExecutable(executable, Version.Parse(args[3]), Enum.Parse<Architecture>(args[2]));
+        Console.WriteLine($"PASS: {args[2]} release ZIP shape, executable headers, architecture, and version {args[3]}.");
+    }
+    finally { Directory.Delete(staged, recursive: true); }
     return;
 }
 
@@ -196,6 +218,8 @@ try
     Check(File.ReadAllBytes(payload).SequenceEqual(executable), "Extract exactly the root executable");
     Check(!File.Exists(Path.Combine(Path.GetDirectoryName(testDirectory)!, "escaped.exe")),
         "Ignore traversal entries instead of extracting them");
+    Reject<InvalidDataException>(() => ReleaseUpdater.ValidateExecutable(payload, new Version(1, 3, 0),
+        RuntimeInformation.ProcessArchitecture), "Reject MZ-only payload before installation");
     File.Delete(payload);
     MakeArchive(("nested/" + ReleaseUpdater.ExecutableName, executable));
     Reject<InvalidDataException>(() => ReleaseUpdater.ExtractExecutable(archivePath, payload),
@@ -207,17 +231,22 @@ try
     Reject<InvalidDataException>(() => ReleaseUpdater.ExtractExecutable(archivePath, payload),
         "Reject non-executable payload");
     File.Delete(payload);
-    MakeArchive((ReleaseUpdater.ExecutableName, executable));
+    string fixture = Environment.ProcessPath!;
+    var fixtureInfo = FileVersionInfo.GetVersionInfo(fixture);
+    var fixtureVersion = new Version(fixtureInfo.FileMajorPart, fixtureInfo.FileMinorPart,
+        fixtureInfo.FileBuildPart, fixtureInfo.FilePrivatePart);
+    byte[] fixtureBytes = File.ReadAllBytes(fixture);
+    MakeArchive((ReleaseUpdater.ExecutableName, fixtureBytes));
     byte[] zipBytes = File.ReadAllBytes(archivePath);
-    var update = new ReleaseUpdate(new Version(1, 3, 0), new Uri(ReleaseUpdater.RepositoryUrl),
+    var update = new ReleaseUpdate(fixtureVersion, new Uri(ReleaseUpdater.RepositoryUrl),
         Convert.ToHexString(SHA256.HashData(zipBytes)));
     using (var updater = new ReleaseUpdater(new HttpClient(new ArchiveHandler(zipBytes))))
     {
         string staged = await updater.StageAsync(update, CancellationToken.None);
         try
         {
-            Check(File.ReadAllBytes(Path.Combine(staged, "payload.exe")).SequenceEqual(executable),
-                "Stage only SHA-256-verified bytes");
+            Check(File.ReadAllBytes(Path.Combine(staged, "payload.exe")).SequenceEqual(fixtureBytes),
+                "Stage only SHA-256-verified bytes with valid architecture and version");
         }
         finally { Directory.Delete(staged, recursive: true); }
         try
@@ -234,6 +263,48 @@ try
             Check(false, "Cancel update staging");
         }
         catch (OperationCanceledException) { Check(true, "Cancel update staging"); }
+    }
+    MakeArchive((ReleaseUpdater.ExecutableName, executable));
+    byte[] invalidZip = File.ReadAllBytes(archivePath);
+    using (var updater = new ReleaseUpdater(new HttpClient(new ArchiveHandler(invalidZip))))
+    {
+        try
+        {
+            await updater.StageAsync(update with { Sha256 = Convert.ToHexString(SHA256.HashData(invalidZip)) },
+                CancellationToken.None);
+            Check(false, "Reject invalid executable even when archive digest is correct");
+        }
+        catch (InvalidDataException) { Check(true, "Reject invalid executable even when archive digest is correct"); }
+    }
+    using (var updater = new ReleaseUpdater(new HttpClient(new ArchiveHandler(zipBytes))))
+    {
+        try
+        {
+            await updater.StageAsync(update with { Version = new Version(fixtureVersion.Major + 1, 0, 0) },
+                CancellationToken.None);
+            Check(false, "Reject version-mismatched executable during staging");
+        }
+        catch (InvalidDataException) { Check(true, "Reject version-mismatched executable during staging"); }
+    }
+    ReleaseUpdater.ValidateExecutable(fixture, fixtureVersion, RuntimeInformation.ProcessArchitecture);
+    Reject<InvalidDataException>(() => ReleaseUpdater.ValidateExecutable(fixture,
+        new Version(fixtureVersion.Major + 1, 0, 0), RuntimeInformation.ProcessArchitecture),
+        "Reject executable whose embedded version differs from its release");
+    Reject<InvalidDataException>(() => ReleaseUpdater.ValidateExecutable(fixture, fixtureVersion,
+        RuntimeInformation.ProcessArchitecture == Architecture.Arm64 ? Architecture.X64 : Architecture.Arm64),
+        "Reject executable with the wrong process architecture");
+    File.WriteAllBytes(payload, fixtureBytes[..(fixtureBytes.Length / 2)]);
+    Reject<InvalidDataException>(() => ReleaseUpdater.ValidateExecutable(payload, fixtureVersion,
+        RuntimeInformation.ProcessArchitecture), "Reject truncated executable section data");
+    using (var process = Process.GetCurrentProcess())
+    {
+        File.WriteAllText(Path.Combine(testDirectory, "ready"), "-1");
+        Reject<TimeoutException>(() => UpdateInstaller.WaitForReady(process, testDirectory,
+            TimeSpan.FromMilliseconds(150)), "Ignore readiness signals from another process");
+        UpdateInstaller.SignalReady(testDirectory);
+        UpdateInstaller.WaitForReady(process, testDirectory, TimeSpan.FromSeconds(1));
+        Check(true, "Accept atomic initialization readiness signal for the expected process");
+        File.Delete(Path.Combine(testDirectory, "ready"));
     }
     string target = Path.Combine(testDirectory, "installed.exe");
     string backup = target + ".update-backup";
@@ -255,6 +326,18 @@ try
         "Restarting an invalid executable fails explicitly");
     Check(File.ReadAllText(target) == "old" && !File.Exists(backup),
         "Failed process restart rolls back the previous executable");
+    string crashTarget = Path.Combine(AppContext.BaseDirectory, "crash-test-" + Guid.NewGuid().ToString("N") + ".exe");
+    try
+    {
+        File.WriteAllText(crashTarget, "old");
+        File.Copy(fixture, payload, overwrite: true);
+        File.WriteAllText(Path.Combine(testDirectory, "crash-before-ready"), "");
+        Reject<InvalidOperationException>(() => UpdateInstaller.Apply(int.MaxValue, crashTarget, testDirectory),
+            "Immediate post-launch crash is treated as failed initialization");
+        Check(File.ReadAllText(crashTarget) == "old",
+            "Restore original executable after an updated process crashes before readiness");
+    }
+    finally { File.Delete(crashTarget); }
 }
 finally { Directory.Delete(testDirectory, recursive: true); }
 Exception? layoutError = null;
