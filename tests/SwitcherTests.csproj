@@ -2,6 +2,7 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
@@ -12,5 +13,7 @@
     <Compile Include="..\MonitorSelection.cs" Link="MonitorSelection.cs" />
     <Compile Include="..\ReleaseUpdater.cs" Link="ReleaseUpdater.cs" />
     <Compile Include="..\UpdateInstaller.cs" Link="UpdateInstaller.cs" />
+    <Compile Include="..\MainForm.cs" Link="MainForm.cs" />
+    <EmbeddedResource Include="..\assets\monitor.ico" LogicalName="OdysseyInputSwitcher.assets.monitor.ico" />
   </ItemGroup>
 </Project>

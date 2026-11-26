@@ -246,6 +246,46 @@ try
         "Failed process restart rolls back the previous executable");
 }
 finally { Directory.Delete(testDirectory, recursive: true); }
+Exception? layoutError = null;
+var layoutThread = new Thread(() =>
+{
+    try
+    {
+        Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
+        using var main = new MainForm();
+        foreach (float size in new[] { 10f, 16f, 24f })
+        {
+            using var font = new System.Drawing.Font("Segoe UI", size);
+            main.Font = font;
+            var (dialog, suppress) = main.CreateInputConfirmation(
+                "Samsung Odyssey OLED G9 - a long monitor description", "Micro HDMI", 6);
+            using (dialog)
+            {
+                // Create handles and lay out without showing the dialog or discovering monitors.
+                _ = dialog.Handle;
+                dialog.PerformAutoScale();
+                dialog.PerformLayout();
+                var content = (TableLayoutPanel)dialog.Controls[0];
+                content.PerformLayout();
+                var warning = (Label)content.GetControlFromPosition(0, 1)!;
+                Check(warning.Height >= warning.GetPreferredSize(new System.Drawing.Size(warning.Width, 0)).Height,
+                    $"Full confirmation warning fits at {size}pt");
+                Check(warning.Bottom <= suppress.Top,
+                    $"Confirmation warning does not overlap preference at {size}pt");
+                Check(content.Bottom <= dialog.ClientSize.Height,
+                    $"All confirmation rows fit inside the dialog at {size}pt");
+                Check(dialog.AcceptButton is Button button && button.Text == "Cancel",
+                    $"Cancel remains default at {size}pt");
+            }
+        }
+    }
+    catch (Exception error) { layoutError = error; }
+});
+layoutThread.SetApartmentState(ApartmentState.STA);
+layoutThread.Start();
+layoutThread.Join();
+if (layoutError is not null)
+    throw new Exception("Font scaling regression failed.", layoutError);
 Console.WriteLine($"PASS: {assertions} hardware-free assertions. No monitor API calls or writes.");
 
 internal sealed class ArchiveHandler(byte[] bytes) : HttpMessageHandler

@@ -165,15 +165,16 @@ internal sealed class MainForm : Form
     {
         var layout = new TableLayoutPanel
         {
-            Dock = DockStyle.Fill, Padding = new Padding(28), ColumnCount = 1, RowCount = 9
+            Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Padding = new Padding(28), ColumnCount = 1, RowCount = 9
         };
-        for (int i = 0; i < 8; i++)
+        AutoScroll = true;
+        for (int i = 0; i < 9; i++)
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         layout.Controls.Add(new Label
         {
             Text = "Odyssey Input Switcher", Font = new Font(Font.FontFamily, 23, FontStyle.Bold),
-            AutoSize = true, Margin = new Padding(0, 0, 0, 2)
+            AutoSize = true, Dock = DockStyle.Top, Margin = new Padding(0, 0, 0, 2)
         }, 0, 0);
         layout.Controls.Add(new Label
         {
@@ -204,16 +205,15 @@ internal sealed class MainForm : Form
         }, 0, 5);
         var inputs = new TableLayoutPanel
         {
-            Dock = DockStyle.Top, Height = 70, RowCount = 1, ColumnCount = 3,
+            Dock = DockStyle.Top, AutoSize = true, RowCount = 1, ColumnCount = 3,
             Margin = new Padding(0, 6, 0, 10)
         };
-        inputs.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        inputs.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         for (int i = 0; i < inputNames.Length; i++)
         {
             int index = i;
             inputs.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3));
             switches[i] = MakeButton(inputNames[i], primary: true);
-            switches[i].AutoSize = false;
             switches[i].AccessibleName = "Switch to " + inputNames[i];
             switches[i].Dock = DockStyle.Fill;
             switches[i].MinimumSize = new Size(0, 60);
@@ -686,15 +686,26 @@ internal sealed class MainForm : Form
     private (DialogResult Result, bool SuppressFuture) ConfirmInputSwitch(
         NativeMonitor monitor, string inputName, uint value)
     {
-        using var dialog = new Form
+        var (dialog, suppress) = CreateInputConfirmation(monitor.DisplayName, inputName, value);
+        using (dialog)
+        {
+            DialogResult result = dialog.ShowDialog(Visible ? this : null);
+            return (result, suppress.Checked);
+        }
+    }
+
+    internal (Form Dialog, CheckBox Suppress) CreateInputConfirmation(
+        string displayName, string inputName, uint value)
+    {
+        var dialog = new Form
         {
             Text = "Confirm input switch",
             Font = Font,
             BackColor = Color.White,
             ForeColor = Ink,
             AutoScaleMode = AutoScaleMode.Dpi,
-            ClientSize = new Size(460, 270),
-            MinimumSize = new Size(420, 270),
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
             FormBorderStyle = FormBorderStyle.FixedDialog,
             MaximizeBox = false,
             MinimizeBox = false,
@@ -704,13 +715,15 @@ internal sealed class MainForm : Form
         };
         var content = new TableLayoutPanel
         {
-            Dock = DockStyle.Fill,
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
             Padding = new Padding(24),
             ColumnCount = 1,
             RowCount = 4
         };
         content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        content.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         content.Controls.Add(new Label
@@ -722,10 +735,10 @@ internal sealed class MainForm : Form
         }, 0, 0);
         content.Controls.Add(new Label
         {
-            Text = $"{monitor.DisplayName}\r\nVCP 0x60 = 0x{value:X4}\r\n\r\n" +
+            Text = $"{displayName}\r\nVCP 0x60 = 0x{value:X4}\r\n\r\n" +
                 "Switching may disconnect this PC. Use the monitor's Source control to return if needed.",
             AutoSize = true,
-            MaximumSize = new Size(400, 0),
+            MaximumSize = new Size((int)Math.Ceiling(400 * Font.SizeInPoints / 10), 0),
             ForeColor = status.ForeColor,
             Margin = new Padding(0, 0, 0, 14)
         }, 0, 1);
@@ -755,8 +768,7 @@ internal sealed class MainForm : Form
         dialog.AcceptButton = no;
         dialog.CancelButton = no;
 
-        DialogResult result = dialog.ShowDialog(Visible ? this : null);
-        return (result, suppress.Checked);
+        return (dialog, suppress);
     }
 
     protected override void WndProc(ref Message message)

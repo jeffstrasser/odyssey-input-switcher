@@ -29,6 +29,8 @@ Discovery refreshes automatically after input-switch attempts, display-topology 
 
 The main window can be resized, and the app uses per-monitor DPI scaling when moved between displays. The Advanced window opens centered over the main window and can be resized independently.
 
+The input confirmation grows to fit its full warning and buttons at larger font sizes. The main window scrolls when its content cannot fit, and input buttons size to their text.
+
 ## System tray
 
 The app's monitor icon appears in the Windows notification area while running (possibly under the hidden-icons arrow). Right-click it to choose **DisplayPort**, **HDMI**, or **Micro HDMI**, refresh monitors, open the app or Advanced, or **Exit**. Tray input actions use the same selected monitor, saved input values, and confirmation as the main window; they are disabled when no valid monitor is selected or an operation is in progress.
