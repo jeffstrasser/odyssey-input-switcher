@@ -264,9 +264,13 @@ var layoutThread = new Thread(() =>
             using var font = new System.Drawing.Font("Segoe UI", size);
             main.Font = font;
             _ = main.Handle;
+            typeof(MainForm).GetMethod("SetScaledMinimumSize",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.Invoke(main, null);
             main.PerformLayout();
             var mainContent = (TableLayoutPanel)main.Controls[0];
             mainContent.PerformLayout();
+            Check(main.Width >= main.MinimumSize.Width && main.ClientSize.Width >= 600 * main.DeviceDpi / 96d,
+                $"Content sizing preserves the designed minimum window width at {size}pt");
             Check(mainContent.Bottom <= main.ClientSize.Height || main.VerticalScroll.Visible,
                 $"Fixed main window fits content or allows scrolling at {size}pt");
             var (dialog, suppress) = main.CreateInputConfirmation(

@@ -74,6 +74,7 @@ internal sealed class MainForm : Form
         BackColor = Canvas;
         ForeColor = Ink;
         ClientSize = new Size(600, 480);
+        MinimumSize = SizeFromClientSize(ClientSize);
         FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;
         AutoSize = true;
@@ -164,6 +165,25 @@ internal sealed class MainForm : Form
             ? Color.FromArgb(24, 72, 184) : Color.FromArgb(230, 236, 247) }
     };
 
+    protected override void OnLoad(EventArgs e)
+    {
+        base.OnLoad(e);
+        SetScaledMinimumSize();
+    }
+
+    protected override void OnDpiChanged(DpiChangedEventArgs e)
+    {
+        base.OnDpiChanged(e);
+        SetScaledMinimumSize();
+    }
+
+    private void SetScaledMinimumSize()
+    {
+        MinimumSize = SizeFromClientSize(new Size(
+            (int)Math.Ceiling(600 * DeviceDpi / 96d),
+            (int)Math.Ceiling(480 * DeviceDpi / 96d)));
+    }
+
     private void BuildMainWindow()
     {
         var layout = new TableLayoutPanel
@@ -182,7 +202,8 @@ internal sealed class MainForm : Form
         layout.Controls.Add(new Label
         {
             Text = "Choose where your monitor gets its picture.",
-            AutoSize = true, ForeColor = status.ForeColor, Margin = new Padding(2, 0, 0, 22)
+            AutoSize = true, Dock = DockStyle.Top,
+            ForeColor = status.ForeColor, Margin = new Padding(2, 0, 0, 22)
         }, 0, 1);
         layout.Controls.Add(new Label
         {
