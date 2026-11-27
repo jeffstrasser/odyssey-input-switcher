@@ -162,6 +162,7 @@ internal sealed class MainForm : Form
                 SetStatus("Waiting for the current operation before exiting...");
             }
         };
+        Layout += (_, _) => SetScaledMinimumSize();
         UpdateControls();
     }
 
@@ -220,8 +221,9 @@ internal sealed class MainForm : Form
 
     private void SetScaledMinimumSize()
     {
-        MinimumSize = SizeFromClientSize(new Size(
-            (int)Math.Ceiling(600 * DeviceDpi / 96d), 0));
+        // ClientSize excludes visible scrollbars as well as the native window frame.
+        MinimumSize = new Size((int)Math.Ceiling(600 * DeviceDpi / 96d) + Width - ClientSize.Width,
+            SizeFromClientSize(Size.Empty).Height);
     }
 
     private void BuildMainWindow()
@@ -277,7 +279,6 @@ internal sealed class MainForm : Form
             int index = i;
             inputs.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3));
             switches[i] = MakeButton(inputNames[i], primary: true);
-            switches[i].AutoSize = false;
             switches[i].UseMnemonic = false;
             switches[i].AccessibleName = "Switch to " + inputNames[i];
             switches[i].Dock = DockStyle.Fill;
@@ -312,6 +313,7 @@ internal sealed class MainForm : Form
         int height = (int)Math.Ceiling(60 * DeviceDpi / 96d);
         foreach (var button in switches)
         {
+            button.MaximumSize = new Size(Math.Max(1, width - button.Margin.Horizontal), 0);
             int textWidth = Math.Max(1, width - button.Margin.Horizontal - button.Padding.Horizontal - 8);
             var textSize = TextRenderer.MeasureText(button.Text, button.Font,
                 new Size(textWidth, int.MaxValue),

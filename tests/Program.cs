@@ -369,7 +369,8 @@ var layoutThread = new Thread(() =>
 {
     try
     {
-        Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
+        Application.SetHighDpiMode(args.Contains("--dpi-unaware")
+            ? HighDpiMode.DpiUnaware : HighDpiMode.PerMonitorV2);
         using (var hidden = new MainForm(startInTray: true))
         {
             hidden.Show();
@@ -493,7 +494,8 @@ var layoutThread = new Thread(() =>
                 $"Custom-name settings fit or scroll without clipping at {size}pt " +
                 $"(panel={namesPanel.ClientSize}, labels={string.Join("; ", namesPanel.Controls.OfType<Label>().Select(label => label.Bounds))})");
             Check(main.Width >= main.MinimumSize.Width && main.ClientSize.Width >= 600 * main.DeviceDpi / 96d,
-                $"Content sizing preserves the designed minimum window width at {size}pt");
+                $"Content sizing preserves the designed minimum window width at {size}pt " +
+                $"(width={main.Width}, minimum={main.MinimumSize}, client={main.ClientSize}, DPI={main.DeviceDpi})");
             Check(mainContent.Bottom <= main.ClientSize.Height || main.VerticalScroll.Visible,
                 $"Fixed main window fits content or allows scrolling at {size}pt");
             Check(main.ClientSize.Height - mainContent.Bottom <= 1,
