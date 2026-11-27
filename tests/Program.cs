@@ -515,21 +515,29 @@ var layoutThread = new Thread(() =>
                 .OfType<ToolStripMenuItem>().Single(item => item.Text == "E&xit").PerformClick();
             Check(hidden.IsDisposed, "Settings Exit stops the hidden app rather than hiding it again");
         }
-        foreach (string pendingOperation in new[] { "busy", "confirming" })
+        foreach (bool fromTray in new[] { false, true })
+        foreach (string pendingOperation in new[] { "none", "busy", "confirming" })
         {
             using var waiting = new MainForm(startInTray: true);
             _ = waiting.Handle;
             var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
-            var pending = typeof(MainForm).GetField(pendingOperation, flags)!;
-            pending.SetValue(waiting, true);
-            var exit = ((ToolStripMenuItem)waiting.MainMenuStrip!.Items[0]).DropDownItems
-                .OfType<ToolStripMenuItem>().Single(item => item.Text == "E&xit");
+            var pending = pendingOperation == "none" ? null : typeof(MainForm).GetField(pendingOperation, flags)!;
+            pending?.SetValue(waiting, true);
+            var items = fromTray
+                ? ((ContextMenuStrip)typeof(MainForm).GetField("trayMenu", flags)!.GetValue(waiting)!).Items
+                : ((ToolStripMenuItem)waiting.MainMenuStrip!.Items[0]).DropDownItems;
+            var exit = items.OfType<ToolStripMenuItem>().Single(item => item.Text == (fromTray ? "&Quit" : "E&xit"));
             exit.PerformClick();
+            if (pending is null)
+            {
+                Check(waiting.IsDisposed, $"{exit.Text} stops the hidden app while idle");
+                continue;
+            }
             Check(!waiting.IsDisposed && (bool)typeof(MainForm).GetField("closeWhenIdle", flags)!.GetValue(waiting)!,
-                $"Settings Exit waits for an outstanding {pendingOperation} operation");
+                $"{exit.Text} waits for an outstanding {pendingOperation} operation");
             pending.SetValue(waiting, false);
             exit.PerformClick();
-            Check(waiting.IsDisposed, $"Settings Exit completes once {pendingOperation} is cleared");
+            Check(waiting.IsDisposed, $"{exit.Text} completes once {pendingOperation} is cleared");
         }
         // Forms must be disposed before the shared font used during their paint/teardown.
         using var originalFont = new System.Drawing.Font("Segoe UI", 9);
@@ -552,12 +560,13 @@ var layoutThread = new Thread(() =>
             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(main)!;
         var trayHiddenMessage = (ToolStripMenuItem)typeof(MainForm).GetField("trayAllInputsHidden",
             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(main)!;
-        Check(trayMenu.Items.Count == 6 && trayMenu.Items[0] == trayMonitor &&
+        Check(trayMenu.Items.Count == 8 && trayMenu.Items[0] == trayMonitor &&
             trayMenu.Items[1] is ToolStripSeparator &&
-            trayMenu.Items.Cast<ToolStripItem>().Skip(2).SequenceEqual(
+            trayMenu.Items.Cast<ToolStripItem>().Skip(2).Take(4).SequenceEqual(
                 menuInputs.Cast<ToolStripItem>().Append(trayHiddenMessage)) &&
+            trayMenu.Items[6] is ToolStripSeparator && trayMenu.Items[7].Text == "&Quit" &&
             trayMenu.Items.OfType<ToolStripMenuItem>().All(item => !item.HasDropDownItems),
-            "Tray menu contains only the monitor heading, input choices and all-hidden guidance");
+            "Tray menu contains the monitor heading, input choices, all-hidden guidance and Quit");
         Check(main.FormBorderStyle == FormBorderStyle.FixedSingle && !main.MaximizeBox,
             "Main window cannot be manually resized or maximized");
         var advanced = (Form)typeof(MainForm).GetField("advanced",

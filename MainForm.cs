@@ -186,7 +186,7 @@ internal sealed class MainForm : Form
                 {
                     explainedTray = true;
                     tray.ShowBalloonTip(4000, "Odyssey is still running",
-                        "Right-click the monitor icon to switch inputs. Double-click it for Settings > Exit.", ToolTipIcon.Info);
+                        "Right-click the monitor icon to switch inputs or Quit. Double-click it for Settings.", ToolTipIcon.Info);
                 }
 
             }
@@ -683,6 +683,8 @@ internal sealed class MainForm : Form
             trayMenu.Items.Add(trayInputs[i]);
         }
         trayMenu.Items.Add(trayAllInputsHidden);
+        trayMenu.Items.Add(new ToolStripSeparator());
+        trayMenu.Items.Add("&Quit", null, (_, _) => ExitApplication());
         trayMenu.Opening += (_, _) => UpdateControls();
         tray.Icon = Icon;
         tray.Text = "Odyssey Input Switcher";
