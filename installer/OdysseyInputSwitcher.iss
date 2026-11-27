@@ -36,6 +36,10 @@ CloseApplications=no
 RestartApplications=no
 SetupLogging=yes
 VersionInfoVersion={#AppFileVersion}
+#ifdef EnableSigning
+SignTool=ConnectedDisplaySelfSigned
+SignedUninstaller=yes
+#endif
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked

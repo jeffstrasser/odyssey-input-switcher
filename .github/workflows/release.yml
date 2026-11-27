@@ -77,7 +77,13 @@ jobs:
         shell: pwsh
         env:
           APP_VERSION: ${{ needs.version.outputs.version }}
-        run: .\build.ps1 -Version $env:APP_VERSION
+          SIGNING_MODE: ${{ github.event_name == 'pull_request' && 'None' || 'SelfSigned' }}
+          SIGNING_PFX_BASE64: ${{ github.event_name != 'pull_request' && secrets.SIGNING_PFX_BASE64 || '' }}
+          SIGNING_PFX_PASSWORD: ${{ github.event_name != 'pull_request' && secrets.SIGNING_PFX_PASSWORD || '' }}
+        run: .\build.ps1 -Version $env:APP_VERSION -SigningMode $env:SIGNING_MODE
+      - name: Verify signing and tamper detection without installing trust
+        shell: pwsh
+        run: .\tests\SigningSmoke.ps1 -Executable .\dist\win-x64\OdysseyInputSwitcher.exe
       - uses: actions/upload-artifact@v4
         with:
           name: release-packages

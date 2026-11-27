@@ -6,3 +6,6 @@ tools/bin/
 tools/obj/
 tests/bin/
 tests/obj/
+*.pfx
+*.p12
+*.key

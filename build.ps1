@@ -4,10 +4,23 @@ param(
     [ValidatePattern('^([1-9]\d*|\d+\.\d+\.\d+)$')]
     [string]$Version,
     [switch]$SkipInstaller,
-    [string]$InnoCompiler
+    [string]$InnoCompiler,
+    [ValidateSet('None', 'SelfSigned')]
+    [string]$SigningMode = 'None',
+    [ValidatePattern('^[A-Fa-f0-9]{40}$')]
+    [string]$SigningCertificateThumbprint,
+    [string]$TimestampServer = 'http://timestamp.digicert.com'
 )
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
+. "$PSScriptRoot\tools\SignRelease.ps1" -TimestampServer $TimestampServer
+$signingThumbprint = $null
+if ($SigningMode -eq 'SelfSigned') {
+    $certificate = Get-ReleaseSigningCertificate -Thumbprint $SigningCertificateThumbprint
+    try { $signingThumbprint = $certificate.Thumbprint }
+    finally { $certificate.Dispose() }
+    Write-Warning 'Self-signed Authenticode does not establish public Windows trust or guarantee fewer SmartScreen warnings.'
+}
 if (!$Version) {
     [xml]$project = Get-Content -LiteralPath 'OdysseyInputSwitcher.csproj'
     $Version = [string]$project.Project.PropertyGroup.Version
@@ -51,10 +64,16 @@ if ($LASTEXITCODE -ne 0) { throw 'Hardware-free tests failed.' }
 $targets = @($Architecture)
 if ($Architecture -eq 'all') { $targets = @('win-x64', 'win-arm64') }
 foreach ($target in $targets) {
+    $executable = "dist\$target\OdysseyInputSwitcher.exe"
+    if (Test-Path -LiteralPath $executable) { Remove-Item -LiteralPath $executable }
     & $dotnet publish 'OdysseyInputSwitcher.csproj' -c Release -r $target --self-contained true `
         -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true `
         -p:PublishTrimmed=false "-p:Version=$Version" "-p:OutputPath=bin\Publish\$target\" -o "dist\$target"
     if ($LASTEXITCODE -ne 0) { throw "Publish failed: $target" }
+    if ($SigningMode -eq 'SelfSigned') {
+        Invoke-ReleaseSigning -Path $executable `
+            -Thumbprint $SigningCertificateThumbprint -TimestampUrl $TimestampServer
+    }
     Copy-Item 'README.md' "dist\$target\README.md"
     Compress-Archive -LiteralPath "dist\$target\OdysseyInputSwitcher.exe", "dist\$target\README.md" `
         -DestinationPath "dist\OdysseyInputSwitcher-$target.zip" -CompressionLevel Optimal -Force
@@ -67,9 +86,22 @@ foreach ($target in $targets) {
 if (!$SkipInstaller) {
     $setup = "dist\OdysseyInputSwitcher-Setup-$Version.exe"
     if (Test-Path -LiteralPath $setup) { Remove-Item -LiteralPath $setup }
-    & $InnoCompiler /Qp "/DAppVersion=$Version" "/DAppFileVersion=$binaryVersion.0" 'installer\OdysseyInputSwitcher.iss'
+    $compilerArguments = @('/Qp', "/DAppVersion=$Version", "/DAppFileVersion=$binaryVersion.0")
+    if ($SigningMode -eq 'SelfSigned') {
+        if ($TimestampServer -notmatch '^https?://[A-Za-z0-9./:_-]+$') { throw 'Invalid timestamp server URL.' }
+        $script = (Join-Path $PSScriptRoot 'tools\SignRelease.ps1').Replace('$', '$$')
+        $shell = (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe').Replace('$', '$$')
+        $signCommand = '$q' + $shell + '$q -NoProfile -File $q' + $script + '$q -FilePath $f'
+        if ($SigningCertificateThumbprint) { $signCommand += " -CertificateThumbprint $SigningCertificateThumbprint" }
+        $signCommand += " -TimestampServer $TimestampServer"
+        $compilerArguments += '/DEnableSigning', "/SConnectedDisplaySelfSigned=$signCommand"
+    }
+    & $InnoCompiler @compilerArguments 'installer\OdysseyInputSwitcher.iss'
     if ($LASTEXITCODE -ne 0 -or !(Test-Path -LiteralPath $setup)) {
         throw 'Universal installer compilation failed.'
+    }
+    if ($SigningMode -eq 'SelfSigned') {
+        Assert-ReleaseSignature -Path $setup -Thumbprint $signingThumbprint -RequireTimestamp
     }
 }
 $artifacts = @("dist\OdysseyInputSwitcher-$($targets[0]).zip")
