@@ -89,7 +89,7 @@ foreach (string invalid in new[]
 {
     "", "(vcp(10 D6(01 04)))", "(vcp(60))", "(vcp(60()))", "(vcp(60(0F GG)))",
     "(vcp(60(10000)))", "(vcp(60(0F))", "(vcp(60(0F))))", "(vcp(60(0F) 60(11)))",
-    "(model(60(11)) vcp(10))"
+    "(model(60(11)) vcp(10))", "(model(vcp(60(11))) vcp(10))"
 })
 {
     try

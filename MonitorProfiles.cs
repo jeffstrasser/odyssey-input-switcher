@@ -45,7 +45,7 @@ internal static class MonitorProfiles
                     throw new InvalidOperationException("Monitor capabilities have unbalanced parentheses.");
                 continue;
             }
-            if (token.Equals("vcp", StringComparison.OrdinalIgnoreCase) &&
+            if (depth <= 1 && token.Equals("vcp", StringComparison.OrdinalIgnoreCase) &&
                 i + 1 < tokens.Length && tokens[i + 1] == "(")
                 vcpDepth = depth + 1;
             if (depth != vcpDepth || !token.Equals("60", StringComparison.OrdinalIgnoreCase))
