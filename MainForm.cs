@@ -45,6 +45,8 @@ internal sealed class MainForm : Form
         Font = new Font("Consolas", 9), BackColor = Color.White
     };
     private readonly string[] inputNames = ["DisplayPort", "HDMI", "Micro HDMI"];
+    private readonly string[] displayNames = ["DisplayPort", "HDMI", "Micro HDMI"];
+    private readonly TextBox[] nameFields = new TextBox[3];
     private readonly TextBox[] values = new TextBox[3];
     private readonly Button[] switches = new Button[3];
     private readonly ToolStripMenuItem[] trayInputs = new ToolStripMenuItem[3];
@@ -74,6 +76,7 @@ internal sealed class MainForm : Form
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "OdysseyInputSwitcher");
     private static string SettingsPath => Path.Combine(SettingsDirectory, "inputs.json");
     private static string PreferencesPath => Path.Combine(SettingsDirectory, "preferences.json");
+    private static string InputNamesPath => Path.Combine(SettingsDirectory, "input-names.json");
     private NativeMonitor? SelectedMonitor => !stale ? monitors.SelectedItem as NativeMonitor : null;
     internal event EventHandler? InitializationCompleted;
 
@@ -101,6 +104,7 @@ internal sealed class MainForm : Form
         BuildMainWindow();
         BuildAdvancedWindow();
         BuildTray();
+        ApplyInputNames(InputDisplayNames.Resolve(null));
         ApplySettings(InputSettings.Resolve(null));
         monitors.SelectedIndexChanged += (_, _) =>
         {
@@ -188,6 +192,7 @@ internal sealed class MainForm : Form
                 return;
             initialized = true;
             LoadSettings();
+            LoadInputNames(InputNamesPath);
             LoadPreferences();
             RefreshStartupSetting();
             InitializationCompleted?.Invoke(this, EventArgs.Empty);
@@ -266,18 +271,22 @@ internal sealed class MainForm : Form
             Dock = DockStyle.Top, AutoSize = true, RowCount = 1, ColumnCount = 3,
             Margin = new Padding(0, 6, 0, 10)
         };
-        inputs.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        inputs.RowStyles.Add(new RowStyle(SizeType.Absolute, 60));
         for (int i = 0; i < inputNames.Length; i++)
         {
             int index = i;
             inputs.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3));
             switches[i] = MakeButton(inputNames[i], primary: true);
+            switches[i].AutoSize = false;
+            switches[i].UseMnemonic = false;
             switches[i].AccessibleName = "Switch to " + inputNames[i];
             switches[i].Dock = DockStyle.Fill;
             switches[i].MinimumSize = new Size(0, 60);
             switches[i].Click += async (_, _) => await SwitchAsync(index);
             inputs.Controls.Add(switches[i], i, 0);
+            switches[i].FontChanged += (_, _) => SizeInputButtons(inputs);
         }
+        inputs.SizeChanged += (_, _) => SizeInputButtons(inputs);
         layout.Controls.Add(inputs, 0, 6);
         var footer = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top };
         var hide = MakeButton("Run in tray");
@@ -293,6 +302,25 @@ internal sealed class MainForm : Form
         MainMenuStrip = menuBar;
         Controls.Add(menuBar);
         FontChanged += (_, _) => menuBar.Font = Font;
+    }
+
+    private void SizeInputButtons(TableLayoutPanel inputs)
+    {
+        int width = inputs.ClientSize.Width / 3;
+        if (width <= 0 || switches.Any(button => button is null))
+            return;
+        int height = (int)Math.Ceiling(60 * DeviceDpi / 96d);
+        foreach (var button in switches)
+        {
+            int textWidth = Math.Max(1, width - button.Margin.Horizontal - button.Padding.Horizontal - 8);
+            var textSize = TextRenderer.MeasureText(button.Text, button.Font,
+                new Size(textWidth, int.MaxValue),
+                TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl | TextFormatFlags.NoPrefix);
+            height = Math.Max(height, Math.Max(button.MinimumSize.Height,
+                textSize.Height + button.Padding.Vertical + 8) + button.Margin.Vertical);
+        }
+        if (inputs.RowStyles[0].Height != height)
+            inputs.RowStyles[0].Height = height;
     }
 
     private void BuildAdvancedWindow()
@@ -371,6 +399,52 @@ internal sealed class MainForm : Form
         settingsTab.Controls.Add(settingsLayout);
         settingsTabs.TabPages.Add(diagnosticTab);
         settingsTabs.TabPages.Add(settingsTab);
+        var namesTab = new TabPage("Input names")
+        {
+            BackColor = Canvas, Padding = new Padding(16), AutoScroll = true
+        };
+        var namesLayout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top, AutoSize = true, ColumnCount = 2, RowCount = 5
+        };
+        namesLayout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        namesLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        var namesExplanation = new Label
+        {
+            Text = $"Name each input after its connected device (1-{InputDisplayNames.MaximumLength} characters).\r\n" +
+                "Names change labels only, not input values or monitor commands.",
+            AutoSize = true, Dock = DockStyle.Fill, Margin = new Padding(3, 0, 3, 20)
+        };
+        namesLayout.Controls.Add(namesExplanation, 0, 0);
+        namesLayout.SetColumnSpan(namesExplanation, 2);
+        for (int i = 0; i < inputNames.Length; i++)
+        {
+            namesLayout.Controls.Add(new Label
+            {
+                Text = inputNames[i], AutoSize = true, Margin = new Padding(3, 6, 18, 10)
+            }, 0, i + 1);
+            nameFields[i] = new TextBox
+            {
+                Dock = DockStyle.Fill, MaxLength = InputDisplayNames.MaximumLength,
+                AccessibleName = inputNames[i] + " display name"
+            };
+            namesLayout.Controls.Add(nameFields[i], 1, i + 1);
+        }
+        var nameActions = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top };
+        var restoreNames = MakeButton("Restore default names");
+        restoreNames.Click += (_, _) =>
+        {
+            for (int i = 0; i < inputNames.Length; i++)
+                nameFields[i].Text = inputNames[i];
+        };
+        var saveNames = MakeButton("Save input names");
+        saveNames.Click += (_, _) => SaveInputNames(InputNamesPath);
+        nameActions.Controls.Add(restoreNames);
+        nameActions.Controls.Add(saveNames);
+        namesLayout.Controls.Add(nameActions, 0, 4);
+        namesLayout.SetColumnSpan(nameActions, 2);
+        namesTab.Controls.Add(namesLayout);
+        settingsTabs.TabPages.Add(namesTab);
         advanced.Controls.Add(settingsTabs);
         PopulateSettingsMenu(settingsMenu.DropDownItems, startupItem, settingsUpdate, saveDefault);
         settingsMenu.DropDownOpening += (_, _) => { RefreshStartupSetting(); UpdateControls(); };
@@ -441,6 +515,7 @@ internal sealed class MainForm : Form
         items.Add(startup);
         items.Add(new ToolStripSeparator());
         items.Add("Input & monitor settings...", null, (_, _) => ShowAdvanced(1));
+        items.Add("Customize input names...", null, (_, _) => ShowAdvanced(2));
         items.Add(defaultMonitor);
         items.Add("Diagnostics & logging...", null, (_, _) => ShowAdvanced(0));
         items.Add(new ToolStripSeparator());
@@ -482,7 +557,8 @@ internal sealed class MainForm : Form
         if (startInTray)
             tray.ShowBalloonTip(5000, "Odyssey settings failed", error.Message, ToolTipIcon.Error);
         else
-            MessageBox.Show(this, error.Message, "Odyssey settings failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageBox.Show(advanced.Visible ? advanced : this, error.Message,
+                "Odyssey settings failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
     }
 
     private void ExitApplication()
@@ -784,7 +860,7 @@ internal sealed class MainForm : Form
             }
             else
             {
-                var confirmation = ConfirmInputSwitch(selected, inputNames[index], value);
+                var confirmation = ConfirmInputSwitch(selected, index, value);
                 answer = confirmation.Result;
                 if (confirmation.SuppressFuture != preferences.SuppressSwitchConfirmation)
                 {
@@ -835,9 +911,9 @@ internal sealed class MainForm : Form
     }
 
     private (DialogResult Result, bool SuppressFuture) ConfirmInputSwitch(
-        NativeMonitor monitor, string inputName, uint value)
+        NativeMonitor monitor, int index, uint value)
     {
-        var (dialog, suppress) = CreateInputConfirmation(monitor.DisplayName, inputName, value);
+        var (dialog, suppress) = CreateInputConfirmation(monitor.DisplayName, index, value);
         using (dialog)
         {
             DialogResult result = dialog.ShowDialog(Visible ? this : null);
@@ -846,8 +922,9 @@ internal sealed class MainForm : Form
     }
 
     internal (Form Dialog, CheckBox Suppress) CreateInputConfirmation(
-        string displayName, string inputName, uint value)
+        string displayName, int index, uint value)
     {
+        string inputName = displayNames[index];
         var dialog = new Form
         {
             Text = "Confirm input switch",
@@ -880,8 +957,10 @@ internal sealed class MainForm : Form
         content.Controls.Add(new Label
         {
             Text = $"Switch to {inputName}?",
+            UseMnemonic = false,
             Font = new Font(Font.FontFamily, 16, FontStyle.Bold),
             AutoSize = true,
+            MaximumSize = new Size((int)Math.Ceiling(400 * Font.SizeInPoints / 10), 0),
             Margin = new Padding(0, 0, 0, 10)
         }, 0, 0);
         content.Controls.Add(new Label
@@ -916,6 +995,12 @@ internal sealed class MainForm : Form
         actions.Controls.Add(no);
         content.Controls.Add(actions, 0, 3);
         dialog.Controls.Add(content);
+        dialog.Layout += (_, _) =>
+        {
+            int width = content.GetPreferredSize(Size.Empty).Width + dialog.Width - dialog.ClientSize.Width;
+            if (dialog.MinimumSize.Width != width)
+                dialog.MinimumSize = new Size(width, 0);
+        };
         dialog.AcceptButton = no;
         dialog.CancelButton = no;
 
@@ -956,6 +1041,57 @@ internal sealed class MainForm : Form
         }
     }
 
+    internal void LoadInputNames(string path)
+    {
+        try
+        {
+            if (!File.Exists(path))
+                return;
+            var stored = JsonSerializer.Deserialize<Dictionary<string, string?>>(File.ReadAllText(path))
+                ?? throw new InvalidOperationException("Saved input names are empty.");
+            ApplyInputNames(InputDisplayNames.Resolve(stored));
+            Append("Loaded input names from " + path);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or
+            JsonException or InvalidOperationException)
+        {
+            ReportSettingsFailure(error);
+        }
+    }
+
+    private void ApplyInputNames(Dictionary<string, string> names)
+    {
+        for (int i = 0; i < inputNames.Length; i++)
+        {
+            displayNames[i] = names[inputNames[i]];
+            nameFields[i].Text = displayNames[i];
+            switches[i].Text = displayNames[i];
+            switches[i].AccessibleName = "Switch to " + displayNames[i];
+            trayInputs[i].Text = displayNames[i].Replace("&", "&&");
+            trayInputs[i].AccessibleName = "Switch to " + displayNames[i];
+        }
+        SizeInputButtons((TableLayoutPanel)switches[0].Parent!);
+    }
+
+    internal void SaveInputNames(string path)
+    {
+        try
+        {
+            var edited = new Dictionary<string, string?>();
+            for (int i = 0; i < inputNames.Length; i++)
+                edited[inputNames[i]] = nameFields[i].Text;
+            var names = InputDisplayNames.Resolve(edited);
+            WriteSettings(path, names);
+            ApplyInputNames(names);
+            Append("Saved input names to " + path);
+            SetStatus("Input names saved.");
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            ReportSettingsFailure(error);
+        }
+    }
+
     private void LoadPreferences()
     {
         try
@@ -986,7 +1122,7 @@ internal sealed class MainForm : Form
 
     private static void WriteSettings(string path, object settings)
     {
-        Directory.CreateDirectory(SettingsDirectory);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         string temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {

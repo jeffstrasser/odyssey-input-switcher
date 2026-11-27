@@ -59,6 +59,10 @@ Automated release tags must be `vMAJOR.MINOR.PATCH` and match the project versio
 
 ## Settings and saved preferences
 
+**Settings > Customize input names...** (also in the tray menu) lets you name DisplayPort, HDMI, and Micro HDMI after their connected devices. Enter 1-48 characters per name, without line breaks or control characters, then choose **Save input names**. Surrounding whitespace is trimmed. **Restore default names** fills in the original names; choose **Save input names** to keep them. Buttons, tray actions, and switch confirmations use saved names; longer button/confirmation labels wrap. Names never change input identities or VCP values.
+
+Names are stored separately in `%LOCALAPPDATA%\OdysseyInputSwitcher\input-names.json`, so existing mappings remain compatible and names persist across restarts and upgrades. Missing names retain their original labels. Invalid saved names are reported rather than silently accepted.
+
 The **Diagnostics** tab contains the detailed log, process architecture, selected display, Windows monitor-interface identity, and saved default. **Read monitor diagnostics** reads VCP `0x60` and the raw capabilities string; each read's error is shown independently. A current value or `60(...)` capabilities list does not prove a working write mapping. No diagnostic read happens automatically during refresh.
 
 In **Inputs & default monitor**, use the preloaded DisplayPort `0x0F`, HDMI `0x05`, and Micro HDMI `0x06` values for the owner's tested setup. Blank old settings are filled from that mapping on launch. For different nonblank old values, click **Use working Odyssey values**, then **Save input values**. This only updates settings; it does not switch anything. Use **Ask before switching inputs** to turn the confirmation back on after opting out. Values remain editable in decimal or `0x` hexadecimal, from 0 through 65535. The numeric range does not mean all values are supported. Do not systematically try values or substitute conventional HDMI `0x11`/`0x12` for this working mapping.

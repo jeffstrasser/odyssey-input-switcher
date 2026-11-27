@@ -41,6 +41,34 @@ internal static class InputSettings
     }
 }
 
+internal static class InputDisplayNames
+{
+    internal const int MaximumLength = 48;
+
+    internal static Dictionary<string, string> Resolve(Dictionary<string, string?>? saved)
+    {
+        var names = new Dictionary<string, string>
+        {
+            ["DisplayPort"] = "DisplayPort",
+            ["HDMI"] = "HDMI",
+            ["Micro HDMI"] = "Micro HDMI"
+        };
+        if (saved is null)
+            return names;
+        foreach (string identity in names.Keys.ToArray())
+        {
+            if (!saved.TryGetValue(identity, out string? text))
+                continue;
+            string name = text?.Trim() ?? "";
+            if (text is null || name.Length == 0 || name.Length > MaximumLength || text.Any(char.IsControl))
+                throw new InvalidOperationException(
+                    $"{identity} needs a name of 1 to {MaximumLength} characters without line breaks or control characters.");
+            names[identity] = name;
+        }
+        return names;
+    }
+}
+
 internal interface IMonitorConnection : IDisposable
 {
     string Description { get; }
