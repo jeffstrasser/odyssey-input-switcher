@@ -654,9 +654,9 @@ var layoutThread = new Thread(() =>
             .Select(item => item.Text).SequenceEqual(expectedMenu),
             "Standard Settings menu exposes preferences, logging, updates, About and Exit with keyboard mnemonics");
         var mainLayout = main.Controls.OfType<TableLayoutPanel>().Single();
-        var footer = (FlowLayoutPanel)mainLayout.GetControlFromPosition(0, 5)!;
-        Check(footer.Controls.OfType<Button>().Select(button => button.Text).SequenceEqual(["Run in tray"]),
-            "Footer retains Run in tray but no Settings button");
+        Check(mainLayout.RowCount == 6 && !mainLayout.Controls.OfType<FlowLayoutPanel>().Any() &&
+            mainLayout.Controls.OfType<Label>().Any(label => mainLayout.GetRow(label) == 5),
+            "Main window has no Run in tray button or empty footer row");
         var trayMenu = (ContextMenuStrip)typeof(MainForm).GetField("trayMenu",
             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(main)!;
         var trayMonitor = (ToolStripMenuItem)typeof(MainForm).GetField("trayMonitor",

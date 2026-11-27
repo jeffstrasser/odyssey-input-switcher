@@ -353,11 +353,11 @@ internal sealed class MainForm : Form
         var layout = new TableLayoutPanel
         {
             Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            Padding = new Padding(14), ColumnCount = 1, RowCount = 7
+            Padding = new Padding(14), ColumnCount = 1, RowCount = 6
         };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         AutoScroll = true;
-        for (int i = 0; i < 7; i++)
+        for (int i = 0; i < 6; i++)
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.Controls.Add(new Label
         {
@@ -410,18 +410,9 @@ internal sealed class MainForm : Form
         inputs.SetColumnSpan(allInputsHidden, 3);
         inputs.SizeChanged += (_, _) => SizeInputButtons(inputs);
         layout.Controls.Add(inputs, 0, 4);
-        var footer = new FlowLayoutPanel
-        {
-            AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Dock = DockStyle.Top
-        };
-        var hide = MakeButton("Run in tray");
-        DescribeButton(hide, "Hide this window and keep the app running. Double-click the tray icon to reopen.");
-        hide.Click += (_, _) => { advanced.Hide(); Hide(); };
-        footer.Controls.Add(hide);
-        layout.Controls.Add(footer, 0, 5);
         status.Dock = DockStyle.Fill;
         status.Margin = new Padding(0, 6, 0, 0);
-        layout.Controls.Add(status, 0, 6);
+        layout.Controls.Add(status, 0, 5);
         Controls.Add(layout);
         menuBar.Font = Font;
         menuBar.Items.Add(settingsMenu);
