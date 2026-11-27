@@ -362,6 +362,28 @@ var layoutThread = new Thread(() =>
         using var main = new MainForm();
         Check(main.FormBorderStyle == FormBorderStyle.FixedSingle && !main.MaximizeBox,
             "Main window cannot be manually resized or maximized");
+        var menuBar = main.MainMenuStrip ?? throw new Exception("Main menu is missing.");
+        Check(main.Controls.Contains(menuBar) && menuBar.Dock == DockStyle.Top &&
+            menuBar.Items.Count == 1 && menuBar.Items[0].Text == "Settings",
+            "Main window has a standard top-level Settings menu");
+        var settings = (ToolStripMenuItem)menuBar.Items[0];
+        var trayIcon = (NotifyIcon)typeof(MainForm).GetField("tray",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(main)!;
+        var traySettings = trayIcon.ContextMenuStrip!.Items.OfType<ToolStripMenuItem>()
+            .Single(item => item.Text == "Settings");
+        string[] settingsEntries =
+        [
+            "Run at Windows startup", "Input & monitor settings...", "Diagnostics & logging...",
+            "Check for updates...", "About Odyssey...", "Save selected monitor as default"
+        ];
+        Check(settings.DropDownItems.OfType<ToolStripMenuItem>().Select(item => item.Text)
+            .SequenceEqual(settingsEntries), "Main Settings menu retains all settings and diagnostics");
+        Check(traySettings.DropDownItems.OfType<ToolStripMenuItem>().Select(item => item.Text)
+            .SequenceEqual(settingsEntries), "Tray Settings submenu retains all settings and diagnostics");
+        var mainContent = (TableLayoutPanel)main.Controls[0];
+        var footer = (FlowLayoutPanel)mainContent.GetControlFromPosition(0, 7)!;
+        Check(footer.Controls.OfType<Button>().Select(button => button.Text).SequenceEqual(["Run in tray"]),
+            "Main window footer no longer contains a Settings button");
         var advanced = (Form)typeof(MainForm).GetField("advanced",
             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(main)!;
         Check(advanced.FormBorderStyle == FormBorderStyle.FixedSingle && !advanced.MaximizeBox,
@@ -374,8 +396,9 @@ var layoutThread = new Thread(() =>
             typeof(MainForm).GetMethod("SetScaledMinimumSize",
                 System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.Invoke(main, null);
             main.PerformLayout();
-            var mainContent = (TableLayoutPanel)main.Controls[0];
             mainContent.PerformLayout();
+            Check(menuBar.Top == 0 && mainContent.Top >= menuBar.Bottom,
+                $"Menu bar sits above main content at {size}pt");
             Check(main.Width >= main.MinimumSize.Width && main.ClientSize.Width >= 600 * main.DeviceDpi / 96d,
                 $"Content sizing preserves the designed minimum window width at {size}pt");
             Check(mainContent.Bottom <= main.ClientSize.Height || main.VerticalScroll.Visible,

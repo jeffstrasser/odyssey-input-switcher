@@ -18,8 +18,7 @@ internal sealed class MainForm : Form
     private readonly Button refresh = MakeButton("Refresh");
     private readonly ToolStripMenuItem saveDefault = new("Save selected monitor as default");
     private readonly ToolStripMenuItem traySaveDefault = new("Save selected monitor as default");
-    private readonly Button settingsButton = MakeButton("Settings");
-    private readonly ContextMenuStrip settingsMenu = new();
+    private readonly ToolStripMenuItem settingsMenu = new("Settings");
     private readonly ToolStripMenuItem startupItem = new("Run at Windows startup");
     private readonly ToolStripMenuItem trayStartupItem = new("Run at Windows startup");
     private readonly ToolStripMenuItem settingsUpdate = new("Check for updates...");
@@ -114,7 +113,6 @@ internal sealed class MainForm : Form
         saveDefault.Click += (_, _) => SaveDefault();
         traySaveDefault.Click += (_, _) => SaveDefault();
         clearDefault.Click += (_, _) => SaveDefault(clear: true);
-        settingsButton.Click += (_, _) => settingsMenu.Show(settingsButton, new Point(0, settingsButton.Height));
         diagnostics.Click += async (_, _) => await DiagnosticsAsync();
         save.Click += (_, _) => SaveSettings();
         confirmSwitch.CheckedChanged += (_, _) => SaveConfirmationPreference();
@@ -281,7 +279,6 @@ internal sealed class MainForm : Form
         }
         layout.Controls.Add(inputs, 0, 6);
         var footer = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top };
-        footer.Controls.Add(settingsButton);
         var hide = MakeButton("Run in tray");
         hide.Click += (_, _) => { advanced.Hide(); Hide(); };
         footer.Controls.Add(hide);
@@ -290,6 +287,10 @@ internal sealed class MainForm : Form
         status.Margin = new Padding(2, 12, 0, 0);
         layout.Controls.Add(status, 0, 8);
         Controls.Add(layout);
+        var menuBar = new MenuStrip();
+        menuBar.Items.Add(settingsMenu);
+        MainMenuStrip = menuBar;
+        Controls.Add(menuBar);
     }
 
     private void BuildAdvancedWindow()
@@ -369,9 +370,9 @@ internal sealed class MainForm : Form
         settingsTabs.TabPages.Add(diagnosticTab);
         settingsTabs.TabPages.Add(settingsTab);
         advanced.Controls.Add(settingsTabs);
-        PopulateSettingsMenu(settingsMenu.Items, startupItem, settingsUpdate);
-        settingsMenu.Items.Add(saveDefault);
-        settingsMenu.Opening += (_, _) => { RefreshStartupSetting(); UpdateControls(); };
+        PopulateSettingsMenu(settingsMenu.DropDownItems, startupItem, settingsUpdate);
+        settingsMenu.DropDownItems.Add(saveDefault);
+        settingsMenu.DropDownOpening += (_, _) => { RefreshStartupSetting(); UpdateControls(); };
     }
 
     private void BuildTray()
@@ -1087,7 +1088,6 @@ internal sealed class MainForm : Form
             tray.Visible = false;
             tray.Dispose();
             trayMenu.Dispose();
-            settingsMenu.Dispose();
             advanced.Dispose();
             Icon?.Dispose();
         }

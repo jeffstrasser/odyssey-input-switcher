@@ -23,7 +23,7 @@ Open `dist\win-x64\OdysseyInputSwitcher.exe` on an Intel/AMD x64 PC, or `dist\wi
 1. Connect the PC to the monitor using HDMI or DisplayPort. Keep the monitor awake and the PC's connection active. If the monitor has a DDC/CI setting, enable it; its presence on this exact model is not assumed.
 2. On startup, the app discovers physical monitors automatically. If there is **only one**, it selects that monitor. If there are **multiple**, it selects a uniquely matching saved default, or waits for you to choose from the monitor list. Choose **Settings > Save selected monitor as default** after selecting your preferred monitor to remember it.
 3. Click **DisplayPort**, **HDMI**, or **Micro HDMI**. The confirmation names the selected monitor and command; **Cancel** is the default. Select **Do not show me this again** to save the preference and skip future confirmations. Have the physical Source control available to recover before approving. The app sends one VCP `0x60` write, without a retry.
-4. Open **Settings** for **Input & monitor settings...**, **Diagnostics & logging...**, update checks, and Windows startup. The main window keeps these options in a dropdown rather than separate settings buttons.
+4. Open **Settings** in the menu bar at the top of the main window for **Input & monitor settings...**, **Diagnostics & logging...**, update checks, and Windows startup.
 
 **Settings > About Odyssey...** in the main or tray menu shows the app name, installed version, creator, process architecture, and source repository.
 
