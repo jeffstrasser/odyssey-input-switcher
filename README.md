@@ -18,6 +18,12 @@ This mapping is owner-confirmed for their setup, not a Samsung-published guarant
 
 ## Run
 
+Download **OdysseyInputSwitcher-Setup-VERSION.exe** from [Releases](https://github.com/jeffstrasser/odyssey-input-switcher/releases) for a guided installation. One installer supports both x64 and ARM64 Windows and selects the native app automatically (Windows 10 version 1809 or later / Windows 11). It installs for the current user in `%LOCALAPPDATA%\Programs\Odyssey Input Switcher`, without administrator rights, and adds a Start menu shortcut plus an optional desktop shortcut. Uninstall from Windows **Installed apps**. Close Odyssey using **Exit** in its tray menu before installing, upgrading, or uninstalling; the installer does not forcibly terminate monitor operations.
+
+Setup does not enable Windows startup. Enable it later from the app's Settings menu if desired. Uninstall preserves input/monitor preferences and removes startup registration only when it points at the executable being uninstalled, not a portable copy elsewhere. Re-running Setup upgrades the same installation. In-app upgrades also work in this writable install location, but the Installed apps version reflects the last Setup run. Installers remain unsigned and may trigger Windows publisher warnings.
+
+The portable ZIPs remain available:
+
 Open `dist\win-x64\OdysseyInputSwitcher.exe` on an Intel/AMD x64 PC, or `dist\win-arm64\OdysseyInputSwitcher.exe` on a Windows ARM64 PC. These are self-contained builds; an installed .NET runtime is not required. Keep the app executable after extracting any distribution archive. Single-file .NET deployment extracts native runtime files into the user's temporary directory. The app is unsigned, so Windows may show its normal unrecognized-publisher warning.
 
 1. Connect the PC to the monitor using HDMI or DisplayPort. Keep the monitor awake and the PC's connection active. If the monitor has a DDC/CI setting, enable it; its presence on this exact model is not assumed.
@@ -49,7 +55,7 @@ If you approve, the app downloads the ZIP for its running process architecture (
 
 In-place upgrades require the **published single-file release** in a writable directory. Protected installation folders, other running copies, or antivirus locks can prevent replacement; the app does not request elevation. Source builds cannot self-install. Saved input and monitor preferences remain unchanged. Packages are unsigned: the digest verifies the downloaded archive against GitHub metadata, not independent publisher identity. Old versions without this feature require one manual upgrade first.
 
-Release tags must be `vMAJOR.MINOR.PATCH` (or the same without `v`), with matching `OdysseyInputSwitcher-win-x64.zip` / `OdysseyInputSwitcher-win-arm64.zip` assets and GitHub SHA-256 digests. Publish with `.\build.ps1 -Version MAJOR.MINOR.PATCH` so the executable version matches the tag. The source version defaults to 1.2.0. Do not reuse version numbers.
+Automated release tags must be `vMAJOR.MINOR.PATCH` and match the project version, with matching `OdysseyInputSwitcher-win-x64.zip` / `OdysseyInputSwitcher-win-arm64.zip` assets and GitHub SHA-256 digests. Publish with `.\build.ps1 -Version MAJOR.MINOR.PATCH` so the executable version matches the tag. The build defaults to the project version (currently 1.3.0). Do not reuse version numbers. The in-app updater continues to use the native ZIP, not the universal Setup executable.
 
 ## Settings and saved preferences
 
@@ -75,7 +81,15 @@ Windows monitor configuration calls can take seconds and do not expose a reliabl
 
 Install the **.NET 10 SDK** for your Windows development PC from [Microsoft](https://dotnet.microsoft.com/download/dotnet/10.0). Visual Studio and C++ build tools are not required. Internet access is needed for the runtime packs on the first self-contained publish.
 
-From this folder, run `.\build.ps1` in PowerShell (subject to your organization's script execution policy). It generates the multi-resolution monitor icon from source, runs hardware-free tests, publishes both architectures into separate `dist` folders, and packages each app and README in a ZIP. Use `.\build.ps1 -Architecture win-x64` or `win-arm64` to publish just one.
+Install [Inno Setup 6.7.3](https://github.com/jrsoftware/issrc/releases/tag/is-6_7_3) to build the installer (`winget install --id JRSoftware.InnoSetup --exact --version 6.7.3`). Then run `.\build.ps1` in PowerShell (subject to your organization's script execution policy). It generates the icon, runs hardware-free tests, publishes and verifies both native ZIPs, compiles one universal Setup executable, and writes `dist\SHA256SUMS-VERSION.txt`. Inno Setup is only a build dependency; users need neither it nor an installed .NET runtime.
+
+Use `-InnoCompiler 'C:\path\ISCC.exe'` for a nonstandard compiler location. Use `-SkipInstaller` for portable-only builds, or `-Architecture win-x64 -SkipInstaller` / `-Architecture win-arm64 -SkipInstaller` for one native ZIP. Setup requires both architectures, so a partial build without `-SkipInstaller` fails rather than using stale payloads. The installer source is `installer\OdysseyInputSwitcher.iss`.
+
+### Release automation
+
+`.github\workflows\release.yml` runs on pull requests, manual dispatch, and `v*` tags. It installs the pinned compiler with a verified SHA-256 digest, builds all packages, and smoke-tests install/reinstall/uninstall on native x64 and ARM64 GitHub-hosted runners. Only a version tag matching the project version publishes a GitHub release, and only after both installer checks pass. Release assets are the universal Setup executable, both portable ZIPs, and the checksum file. Update the project version, merge the change, then push the corresponding new tag. No release is published by PR or manual-dispatch runs.
+
+For local installer validation, run `.\tests\InstallerSmoke.ps1 -Installer dist\OdysseyInputSwitcher-Setup-VERSION.exe` after a full build. This installs and uninstalls in a temporary directory and checks native payload bytes and saved-settings/startup preservation. Run on a disposable Windows test account with no existing Odyssey installer registration; it makes temporary Installed apps and Start menu entries. It does not launch the app or enable Windows startup.
 
 If script execution is disabled, run these equivalent commands directly, replacing `dotnet` with `.\.tools\dotnet\dotnet.exe` if using the folder-local SDK:
 
@@ -85,6 +99,8 @@ dotnet run --project tests\SwitcherTests.csproj -c Release
 dotnet publish OdysseyInputSwitcher.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishTrimmed=false -o dist\win-x64
 dotnet publish OdysseyInputSwitcher.csproj -c Release -r win-arm64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishTrimmed=false -o dist\win-arm64
 ```
+
+Those direct commands publish executables only. Use the full build script to produce release ZIPs, checksums, and Setup.
 
 Cross-publishing ARM64 on an x64 PC is supported; it does not prove ARM64 execution. The hardware-free tests cover value parsing, saved-value overrides and preset restoration, sole-monitor selection, missing/duplicate/reordered default identities, monitor and confirmation preference serialization, single-write/no-readback behavior, write failures without retries, native interop structure sizes, and exactly-once release of valid zero-valued physical-monitor handles. Physical switching and native ARM64 execution need the corresponding hardware.
 
