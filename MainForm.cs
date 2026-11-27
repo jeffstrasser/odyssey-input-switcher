@@ -21,7 +21,10 @@ internal sealed class MainForm : Form
     private readonly ToolStripMenuItem settingsMenu = new("&Settings");
     private readonly CheckBox runAtStartup = new() { Text = "Run at Windows startup", AutoSize = true };
     private readonly ToolStripMenuItem settingsUpdate = new("Check for updates...");
-    private readonly TabControl settingsTabs = new() { Dock = DockStyle.Fill, Padding = new Point(16, 8) };
+    private readonly TabControl settingsTabs = new() { Dock = DockStyle.Fill, Padding = new Point(10, 4) };
+    private readonly ToolTip buttonHelp = new() { AutoPopDelay = 15000 };
+    private bool settingsReady;
+    private bool sizingSettings;
     private readonly Button diagnostics = MakeButton("Read monitor diagnostics");
     private readonly Button save = MakeButton("Save input values");
     private readonly Button restore = MakeButton("Use working Odyssey values");
@@ -102,10 +105,10 @@ internal sealed class MainForm : Form
         Text = "Odyssey Input Switcher";
         StartPosition = FormStartPosition.CenterScreen;
         AutoScaleMode = AutoScaleMode.Dpi;
-        Font = new Font("Segoe UI", 10);
+        Font = new Font("Segoe UI", 9);
         BackColor = Canvas;
         ForeColor = Ink;
-        ClientSize = new Size(600, 1);
+        ClientSize = new Size(440, 1);
         MinimumSize = SizeFromClientSize(ClientSize);
         FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;
@@ -202,20 +205,51 @@ internal sealed class MainForm : Form
     {
         Text = text, AutoSize = true, FlatStyle = FlatStyle.Flat,
         BackColor = primary ? Accent : Color.White, ForeColor = primary ? Color.White : Ink,
-        Padding = new Padding(12, 7, 12, 7), Cursor = Cursors.Hand,
+        Padding = new Padding(8, 3, 8, 3), Cursor = Cursors.Hand,
         FlatAppearance = { BorderSize = 0, MouseOverBackColor = primary
             ? Color.FromArgb(24, 72, 184) : Color.FromArgb(230, 236, 247) }
     };
 
-    private static FlowLayoutPanel MakeSettingsActions()
+    private static TableLayoutPanel MakeSettingsActions()
     {
-        var panel = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top };
-        panel.SizeChanged += (_, _) =>
+        var panel = new TableLayoutPanel
         {
-            foreach (var button in panel.Controls.OfType<Button>())
-                button.MaximumSize = new Size(Math.Max(1, panel.ClientSize.Width - button.Margin.Horizontal), 0);
+            AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Dock = DockStyle.Top, ColumnCount = 2,
+            Margin = new Padding(0, 10, 0, 0)
+        };
+        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 45));
+        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 55));
+        panel.Layout += (_, _) =>
+        {
+            foreach (Control control in panel.Controls)
+            {
+                float fraction = panel.GetColumn(control) == 0 ? 0.45f : 0.55f;
+                int minimumWidth = control is Button ? control.Padding.Horizontal + 8 : 1;
+                control.MaximumSize = new Size(
+                    Math.Max(minimumWidth, (int)(panel.ClientSize.Width * fraction) - control.Margin.Horizontal), 0);
+            }
         };
         return panel;
+    }
+
+    private void DescribeButton(Button button, string description)
+    {
+        button.AccessibleDescription = description;
+        buttonHelp.SetToolTip(button, description);
+    }
+
+    private void AddSettingsAction(TableLayoutPanel panel, Button button, string description)
+    {
+        DescribeButton(button, description);
+        int row = panel.RowCount++;
+        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        button.Dock = DockStyle.Top;
+        panel.Controls.Add(button, 0, row);
+        panel.Controls.Add(new Label
+        {
+            Text = description, AutoSize = true, Dock = DockStyle.Top,
+            ForeColor = status.ForeColor, Margin = new Padding(10, 6, 3, 6)
+        }, 1, row);
     }
 
     protected override void OnLoad(EventArgs e)
@@ -267,8 +301,10 @@ internal sealed class MainForm : Form
     private void SetScaledMinimumSize()
     {
         // ClientSize excludes visible scrollbars as well as the native window frame.
-        MinimumSize = new Size((int)Math.Ceiling(600 * DeviceDpi / 96d) + Width - ClientSize.Width,
+        MinimumSize = new Size((int)Math.Ceiling(440 * DeviceDpi / 96d) + Width - ClientSize.Width,
             SizeFromClientSize(Size.Empty).Height);
+        if (switches[0]?.Parent is TableLayoutPanel inputs)
+            SizeInputButtons(inputs);
     }
 
     private void BuildMainWindow()
@@ -276,49 +312,43 @@ internal sealed class MainForm : Form
         var layout = new TableLayoutPanel
         {
             Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            Padding = new Padding(28), ColumnCount = 1, RowCount = 9
+            Padding = new Padding(14), ColumnCount = 1, RowCount = 7
         };
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         AutoScroll = true;
-        for (int i = 0; i < 9; i++)
+        for (int i = 0; i < 7; i++)
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.Controls.Add(new Label
         {
-            Text = "Odyssey Input Switcher", Font = new Font(Font.FontFamily, 23, FontStyle.Bold),
+            Text = "Monitor", Font = new Font(Font, FontStyle.Bold),
             AutoSize = true, Dock = DockStyle.Top, Margin = new Padding(0, 0, 0, 2)
         }, 0, 0);
-        layout.Controls.Add(new Label
+        var selection = new TableLayoutPanel
         {
-            Text = "Choose where your monitor gets its picture.",
-            AutoSize = true, Dock = DockStyle.Top,
-            ForeColor = status.ForeColor, Margin = new Padding(2, 0, 0, 22)
-        }, 0, 1);
-        layout.Controls.Add(new Label
-        {
-            Text = "MONITOR", AutoSize = true, ForeColor = Accent,
-            Font = new Font(Font, FontStyle.Bold), Margin = new Padding(2, 0, 0, 2)
-        }, 0, 2);
-        var selection = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 2 };
+            Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 2
+        };
         selection.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         selection.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         monitors.Margin = new Padding(0, 6, 10, 8);
         selection.Controls.Add(monitors, 0, 0);
         selection.Controls.Add(refresh, 1, 0);
-        layout.Controls.Add(selection, 0, 3);
-        var defaults = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top };
-        defaultLabel.Margin = new Padding(4, 6, 0, 6);
-        defaults.Controls.Add(defaultLabel);
-        layout.Controls.Add(defaults, 0, 4);
+        DescribeButton(refresh, "Find connected monitors again. Does not switch inputs.");
+        layout.Controls.Add(selection, 0, 1);
+        defaultLabel.Dock = DockStyle.Fill;
+        defaultLabel.Margin = new Padding(0, 2, 0, 4);
+        layout.Controls.Add(defaultLabel, 0, 2);
         layout.Controls.Add(new Label
         {
-            Text = "SWITCH INPUT", AutoSize = true, ForeColor = Accent,
-            Font = new Font(Font, FontStyle.Bold), Margin = new Padding(2, 18, 0, 2)
-        }, 0, 5);
+            Text = "Switch input", AutoSize = true,
+            Font = new Font(Font, FontStyle.Bold), Margin = new Padding(0, 8, 0, 2)
+        }, 0, 3);
         var inputs = new TableLayoutPanel
         {
-            Dock = DockStyle.Top, AutoSize = true, RowCount = 2, ColumnCount = 3,
-            Margin = new Padding(0, 6, 0, 10)
+            Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            RowCount = 2, ColumnCount = 3,
+            Margin = new Padding(0, 4, 0, 6)
         };
-        inputs.RowStyles.Add(new RowStyle(SizeType.Absolute, 60));
+        inputs.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
         inputs.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         for (int i = 0; i < inputNames.Length; i++)
         {
@@ -328,7 +358,8 @@ internal sealed class MainForm : Form
             switches[i].UseMnemonic = false;
             switches[i].AccessibleName = "Switch to " + inputNames[i];
             switches[i].Dock = DockStyle.Fill;
-            switches[i].MinimumSize = new Size(0, 60);
+            switches[i].MinimumSize = new Size(0, 36);
+            DescribeButton(switches[i], "Switch the selected monitor to " + inputNames[i] + ".");
             switches[i].Click += async (_, _) => await SwitchAsync(index);
             inputs.Controls.Add(switches[i], i, 0);
             switches[i].FontChanged += (_, _) => SizeInputButtons(inputs);
@@ -336,15 +367,19 @@ internal sealed class MainForm : Form
         inputs.Controls.Add(allInputsHidden, 0, 1);
         inputs.SetColumnSpan(allInputsHidden, 3);
         inputs.SizeChanged += (_, _) => SizeInputButtons(inputs);
-        layout.Controls.Add(inputs, 0, 6);
-        var footer = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top };
+        layout.Controls.Add(inputs, 0, 4);
+        var footer = new FlowLayoutPanel
+        {
+            AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Dock = DockStyle.Top
+        };
         var hide = MakeButton("Run in tray");
+        DescribeButton(hide, "Hide this window and keep Odyssey running. Double-click the tray icon to reopen.");
         hide.Click += (_, _) => { advanced.Hide(); Hide(); };
         footer.Controls.Add(hide);
-        layout.Controls.Add(footer, 0, 7);
-        status.MaximumSize = new Size(540, 0);
-        status.Margin = new Padding(2, 12, 0, 0);
-        layout.Controls.Add(status, 0, 8);
+        layout.Controls.Add(footer, 0, 5);
+        status.Dock = DockStyle.Fill;
+        status.Margin = new Padding(0, 6, 0, 0);
+        layout.Controls.Add(status, 0, 6);
         Controls.Add(layout);
         menuBar.Font = Font;
         menuBar.Items.Add(settingsMenu);
@@ -364,7 +399,7 @@ internal sealed class MainForm : Form
         int width = inputs.ClientSize.Width / count;
         if (width <= 0 || switches.Any(button => button is null))
             return;
-        int height = (int)Math.Ceiling(60 * DeviceDpi / 96d);
+        int height = (int)Math.Ceiling(36 * DeviceDpi / 96d);
         for (int i = 0; i < switches.Length; i++)
         {
             if (!visibleInputs[i])
@@ -389,7 +424,8 @@ internal sealed class MainForm : Form
         advanced.BackColor = Canvas;
         advanced.ForeColor = Ink;
         advanced.AutoScaleMode = AutoScaleMode.Dpi;
-        advanced.ClientSize = new Size(750, 560);
+        advanced.AutoScaleDimensions = new SizeF(96, 96);
+        advanced.ClientSize = new Size(650, 480);
         advanced.FormBorderStyle = FormBorderStyle.FixedSingle;
         advanced.MaximizeBox = false;
         advanced.StartPosition = FormStartPosition.CenterParent;
@@ -404,26 +440,35 @@ internal sealed class MainForm : Form
         };
         var diagnosticTab = new TabPage("Diagnostics")
         {
-            BackColor = Canvas, Padding = new Padding(16), AutoScroll = true
+            BackColor = Canvas, Padding = new Padding(12)
         };
         var settingsTab = new TabPage("Input values")
         {
-            BackColor = Canvas, Padding = new Padding(16), AutoScroll = true
+            BackColor = Canvas, Padding = new Padding(12)
         };
-        var diagnosticLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3 };
+        var diagnosticLayout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            ColumnCount = 1, RowCount = 3
+        };
+        diagnosticLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         diagnosticLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         diagnosticLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        diagnosticLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        diagnosticSummary.MaximumSize = new Size(680, 0);
+        diagnosticLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 160));
+        diagnosticSummary.Dock = DockStyle.Fill;
         diagnosticSummary.Margin = new Padding(3, 0, 3, 12);
         diagnosticLayout.Controls.Add(diagnosticSummary, 0, 0);
-        diagnosticLayout.Controls.Add(diagnostics, 0, 1);
+        var diagnosticActions = MakeSettingsActions();
+        AddSettingsAction(diagnosticActions, diagnostics,
+            "Read the current input and monitor capabilities. Does not switch inputs.");
+        diagnosticLayout.Controls.Add(diagnosticActions, 0, 1);
         diagnosticLayout.Controls.Add(log, 0, 2);
         diagnosticTab.Controls.Add(diagnosticLayout);
 
         var settingsLayout = new TableLayoutPanel
         {
-            Dock = DockStyle.Top, AutoSize = true, ColumnCount = 2, RowCount = 5
+            Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            ColumnCount = 2, RowCount = 5
         };
         settingsLayout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         settingsLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
@@ -432,7 +477,7 @@ internal sealed class MainForm : Form
             Text = "VCP 0x60 input values (decimal or 0x hex).\r\n" +
                 "Working Odyssey profile: DisplayPort 0x0F, HDMI 0x05, Micro HDMI 0x06.\r\n" +
                 "Changing these settings does not send monitor commands.",
-            AutoSize = true, Dock = DockStyle.Fill, Margin = new Padding(3, 0, 3, 20)
+            AutoSize = true, Dock = DockStyle.Fill, Margin = new Padding(3, 0, 3, 12)
         };
         settingsLayout.Controls.Add(explanation, 0, 0);
         settingsLayout.SetColumnSpan(explanation, 2);
@@ -447,45 +492,47 @@ internal sealed class MainForm : Form
             settingsLayout.Controls.Add(values[i], 1, i + 1);
         }
         var actions = MakeSettingsActions();
-        actions.Controls.Add(restore);
-        actions.Controls.Add(save);
+        AddSettingsAction(actions, restore, "Fill in the tested Odyssey values. Choose Save input values to keep them.");
+        AddSettingsAction(actions, save, "Save these command values for future switches. Does not switch inputs.");
         settingsLayout.Controls.Add(actions, 0, 4);
         settingsLayout.SetColumnSpan(actions, 2);
         settingsTab.Controls.Add(settingsLayout);
 
         var generalTab = new TabPage("General")
         {
-            BackColor = Canvas, Padding = new Padding(16), AutoScroll = true
+            BackColor = Canvas, Padding = new Padding(12)
         };
         var generalLayout = new TableLayoutPanel
         {
-            Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, RowCount = 5
+            Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            ColumnCount = 1, RowCount = 5
         };
         generalLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         generalLayout.Controls.Add(new Label
         {
             Text = "Startup and confirmation changes are saved immediately.\r\n" +
                 "Choose a monitor in the main window before saving it as your default.",
-            AutoSize = true, Dock = DockStyle.Fill, Margin = new Padding(3, 0, 3, 20)
+            AutoSize = true, Dock = DockStyle.Fill, Margin = new Padding(3, 0, 3, 12)
         }, 0, 0);
         generalLayout.Controls.Add(runAtStartup, 0, 1);
         generalLayout.Controls.Add(confirmSwitch, 0, 2);
         settingsMonitor.Margin = new Padding(3, 16, 3, 12);
         generalLayout.Controls.Add(settingsMonitor, 0, 3);
         var monitorActions = MakeSettingsActions();
-        monitorActions.Controls.Add(saveDefault);
-        monitorActions.Controls.Add(clearDefault);
+        AddSettingsAction(monitorActions, saveDefault, "Remember the selected monitor for automatic selection on startup.");
+        AddSettingsAction(monitorActions, clearDefault, "Forget the saved monitor. A sole connected monitor is still selected automatically.");
         generalLayout.Controls.Add(monitorActions, 0, 4);
         generalTab.Controls.Add(generalLayout);
         settingsTabs.TabPages.Add(generalTab);
 
         var namesTab = new TabPage("Inputs")
         {
-            BackColor = Canvas, Padding = new Padding(16), AutoScroll = true
+            BackColor = Canvas, Padding = new Padding(12)
         };
         var namesLayout = new TableLayoutPanel
         {
-            Dock = DockStyle.Top, AutoSize = true, ColumnCount = 3, RowCount = 5
+            Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            ColumnCount = 3, RowCount = 5
         };
         namesLayout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         namesLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
@@ -494,8 +541,8 @@ internal sealed class MainForm : Form
         {
             Text = $"Name each input after its connected device (1-{InputDisplayNames.MaximumLength} characters).\r\n" +
                 "Use Show to choose which inputs appear in the main window and tray.\r\n" +
-                "Save names and visibility separately. Neither changes input values or sends monitor commands.",
-            AutoSize = true, Dock = DockStyle.Fill, Margin = new Padding(3, 0, 3, 20)
+                "Names and visibility are saved separately; neither switches inputs.",
+            AutoSize = true, Dock = DockStyle.Fill, Margin = new Padding(3, 0, 3, 12)
         };
         namesLayout.Controls.Add(namesExplanation, 0, 0);
         namesLayout.SetColumnSpan(namesExplanation, 3);
@@ -528,24 +575,76 @@ internal sealed class MainForm : Form
         };
         var saveNames = MakeButton("Save input names");
         saveNames.Click += (_, _) => SaveInputNames(InputNamesPath);
-        nameActions.Controls.Add(restoreNames);
-        nameActions.Controls.Add(saveNames);
+        AddSettingsAction(nameActions, restoreNames,
+            "Fill in the original port names. Choose Save input names to keep them.");
+        AddSettingsAction(nameActions, saveNames,
+            "Apply and remember these names in the main window, tray, and confirmations.");
         var saveVisibility = MakeButton("Save visible inputs");
         saveVisibility.Click += (_, _) => SaveInputVisibility(InputVisibilityPath);
-        nameActions.Controls.Add(saveVisibility);
+        AddSettingsAction(nameActions, saveVisibility,
+            "Apply and remember the Show checkboxes. Hidden inputs disappear from the main window and tray.");
         namesLayout.Controls.Add(nameActions, 0, 4);
         namesLayout.SetColumnSpan(nameActions, 3);
         namesTab.Controls.Add(namesLayout);
         settingsTabs.TabPages.Add(namesTab);
         var advancedTab = new TabPage("Advanced") { BackColor = Canvas };
-        var advancedTabs = new TabControl { Dock = DockStyle.Fill, Padding = new Point(16, 8) };
+        var advancedTabs = new TabControl { Dock = DockStyle.Fill, Padding = new Point(10, 4) };
         advancedTabs.TabPages.Add(settingsTab);
         advancedTabs.TabPages.Add(diagnosticTab);
         advancedTab.Controls.Add(advancedTabs);
         settingsTabs.TabPages.Add(advancedTab);
         advanced.Controls.Add(settingsTabs);
+        settingsReady = true;
+        advanced.Layout += (_, _) => SizeSettingsWindow();
+        advanced.FontChanged += (_, _) => SizeSettingsWindow();
+        advanced.DpiChanged += (_, _) => SizeSettingsWindow();
+        settingsMonitor.TextChanged += (_, _) => SizeSettingsWindow();
+        diagnosticSummary.TextChanged += (_, _) => SizeSettingsWindow();
+        advanced.PerformAutoScale();
+        SizeSettingsWindow();
         PopulateSettingsMenu(settingsMenu.DropDownItems, settingsUpdate);
         settingsMenu.DropDownOpening += (_, _) => { RefreshStartupSetting(); UpdateControls(); };
+    }
+
+    private void SizeSettingsWindow()
+    {
+        if (!settingsReady || sizingSettings || advanced.IsDisposed)
+            return;
+        sizingSettings = true;
+        try
+        {
+            int width = (int)Math.Ceiling(650 * advanced.DeviceDpi / 96d);
+            if (advanced.ClientSize.Width != width)
+                advanced.ClientSize = new Size(width, advanced.ClientSize.Height);
+            advanced.PerformLayout();
+            int height = SettingsContentHeight(settingsTabs);
+            if (advanced.ClientSize.Height != height)
+                advanced.ClientSize = new Size(advanced.ClientSize.Width, height);
+        }
+        finally { sizingSettings = false; }
+    }
+
+    private static int SettingsContentHeight(TabControl tabs)
+    {
+        tabs.PerformLayout();
+        int height = 0;
+        foreach (TabPage page in tabs.TabPages)
+        {
+            page.PerformLayout();
+            int contentHeight;
+            if (page.Controls.OfType<TabControl>().FirstOrDefault() is { } nested)
+                contentHeight = SettingsContentHeight(nested);
+            else
+            {
+                var panel = page.Controls.OfType<TableLayoutPanel>().Single();
+                int width = Math.Max(1, tabs.DisplayRectangle.Width - page.Padding.Horizontal);
+                panel.Width = width;
+                panel.PerformLayout();
+                contentHeight = panel.GetPreferredSize(new Size(width, 0)).Height;
+            }
+            height = Math.Max(height, contentHeight + page.Padding.Vertical);
+        }
+        return height + tabs.Height - tabs.DisplayRectangle.Height;
     }
 
     private void BuildTray()
@@ -583,6 +682,11 @@ internal sealed class MainForm : Form
         UpdateControls();
         settingsTabs.SelectedIndex = tab;
         advanced.Show(this);
+        SizeSettingsWindow();
+        var area = Screen.FromControl(this).WorkingArea;
+        advanced.Location = new Point(
+            Math.Clamp(Left + (Width - advanced.Width) / 2, area.Left, Math.Max(area.Left, area.Right - advanced.Width)),
+            Math.Clamp(Top + (Height - advanced.Height) / 2, area.Top, Math.Max(area.Top, area.Bottom - advanced.Height)));
         advanced.Activate();
     }
 
@@ -1085,6 +1189,7 @@ internal sealed class MainForm : Form
             ColumnCount = 1,
             RowCount = 4
         };
+        content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -1095,6 +1200,7 @@ internal sealed class MainForm : Form
             UseMnemonic = false,
             Font = new Font(Font.FontFamily, 16, FontStyle.Bold),
             AutoSize = true,
+            Dock = DockStyle.Fill,
             MaximumSize = new Size((int)Math.Ceiling(400 * Font.SizeInPoints / 10), 0),
             Margin = new Padding(0, 0, 0, 10)
         }, 0, 0);
@@ -1103,6 +1209,7 @@ internal sealed class MainForm : Form
             Text = $"{displayName}\r\nVCP 0x60 = 0x{value:X4}\r\n\r\n" +
                 "Switching may disconnect this PC. Use the monitor's Source control to return if needed.",
             AutoSize = true,
+            Dock = DockStyle.Fill,
             MaximumSize = new Size((int)Math.Ceiling(400 * Font.SizeInPoints / 10), 0),
             ForeColor = status.ForeColor,
             Margin = new Padding(0, 0, 0, 14)
@@ -1202,6 +1309,8 @@ internal sealed class MainForm : Form
             nameFields[i].Text = displayNames[i];
             switches[i].Text = displayNames[i];
             switches[i].AccessibleName = "Switch to " + displayNames[i];
+            DescribeButton(switches[i], "Switch the selected monitor to " + displayNames[i] +
+                " (" + inputNames[i] + ").");
             trayInputs[i].Text = displayNames[i].Replace("&", "&&");
             trayInputs[i].AccessibleName = "Switch to " + displayNames[i];
         }
@@ -1423,6 +1532,7 @@ internal sealed class MainForm : Form
             tray.Dispose();
             trayMenu.Dispose();
             advanced.Dispose();
+            buttonHelp.Dispose();
             Icon?.Dispose();
         }
         base.Dispose(disposing);
