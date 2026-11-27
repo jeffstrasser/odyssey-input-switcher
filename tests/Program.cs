@@ -74,6 +74,20 @@ foreach (string? invalid in new string?[] { null, "-1", "65536", "0xGG" })
     }
 }
 var monitor = new FakeMonitor();
+Check(InputVisibility.Resolve(null).Values.All(visible => visible),
+    "All inputs are visible by default for existing installations");
+var visibilitySettings = InputVisibility.Resolve(new Dictionary<string, bool?> { ["HDMI"] = false });
+Check(!visibilitySettings["HDMI"] && visibilitySettings["DisplayPort"] && visibilitySettings["Micro HDMI"],
+    "Explicitly hidden inputs stay hidden and missing visibility keys default to shown");
+try
+{
+    InputVisibility.Resolve(new Dictionary<string, bool?> { ["HDMI"] = null });
+    Check(false, "Reject corrupt visibility rather than silently hiding an input");
+}
+catch (InvalidOperationException)
+{
+    Check(true, "Reject corrupt visibility rather than silently hiding an input");
+}
 var customNames = InputDisplayNames.Resolve(new Dictionary<string, string?>
 {
     ["HDMI"] = "  Work PC & console  "
@@ -387,7 +401,7 @@ var layoutThread = new Thread(() =>
         using var main = new MainForm();
         var menu = main.MainMenuStrip ?? throw new Exception("Standard menu bar is missing.");
         var settingsMenu = (ToolStripMenuItem)menu.Items[0];
-        string[] expectedMenu = ["Run at Windows startup", "Input & monitor settings...", "Customize input names...",
+        string[] expectedMenu = ["Run at Windows startup", "Input & monitor settings...", "Customize input names...", "Visible inputs...",
             "Save selected monitor as default", "Diagnostics & logging...", "Check for updates...", "About Odyssey..."];
         Check(settingsMenu.Text == "&Settings" && settingsMenu.DropDownItems.OfType<ToolStripMenuItem>()
             .Select(item => item.Text).SequenceEqual(expectedMenu),
@@ -461,6 +475,91 @@ var layoutThread = new Thread(() =>
             main.SaveInputNames(namesPath);
         }
         finally { if (Directory.Exists(namesDirectory)) Directory.Delete(namesDirectory, recursive: true); }
+        var visibilityFields = (CheckBox[])typeof(MainForm).GetField("visibilityFields",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(main)!;
+        var trayInputs = (ToolStripMenuItem[])typeof(MainForm).GetField("trayInputs",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(main)!;
+        var hiddenMessage = (Label)typeof(MainForm).GetField("allInputsHidden",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(main)!;
+        var inputPanel = (TableLayoutPanel)switches[0].Parent!;
+        string visibilityDirectory = Path.Combine(AppContext.BaseDirectory, "visibility-test-" + Guid.NewGuid().ToString("N"));
+        string visibilityPath = Path.Combine(visibilityDirectory, "input-visibility.json");
+        string combinedNamesPath = Path.Combine(visibilityDirectory, "input-names.json");
+        main.Show();
+        try
+        {
+            main.SaveInputNames(combinedNamesPath);
+            string originalNamesFile = File.ReadAllText(combinedNamesPath);
+            var originalFont = main.Font;
+            foreach (float size in new[] { 10f, 16f, 24f })
+            {
+                using var font = new System.Drawing.Font("Segoe UI", size);
+                main.Font = font;
+                for (int mask = 0; mask < 8; mask++)
+                {
+                    bool[] expected = Enumerable.Range(0, 3).Select(i => (mask & (1 << i)) != 0).ToArray();
+                    for (int i = 0; i < visibilityFields.Length; i++)
+                        visibilityFields[i].Checked = expected[i];
+                    main.SaveInputVisibility(visibilityPath);
+                    main.PerformLayout();
+                    inputPanel.PerformLayout();
+                    Check(switches.Select(button => button.Visible).SequenceEqual(expected) &&
+                        trayInputs.Select(item => item.Available).SequenceEqual(expected),
+                        $"Visibility updates main and tray actions for mask {mask} at {size}pt");
+                    int[] widths = inputPanel.GetColumnWidths();
+                    int count = expected.Count(visible => visible);
+                    Check(count == 0 ? inputPanel.RowStyles[0].Height == 0 :
+                        Enumerable.Range(0, 3).All(i => expected[i] ? widths[i] > 0 : widths[i] == 0) &&
+                        widths.Sum() == inputPanel.ClientSize.Width,
+                        $"Visible buttons reflow without empty slots for mask {mask} at {size}pt");
+                    Check(hiddenMessage.Visible == (count == 0) &&
+                        trayMenu.Items.OfType<ToolStripMenuItem>().Single(item =>
+                            item.Text == "All inputs hidden - Settings > Visible inputs...").Available == (count == 0) &&
+                        (count != 0 || (hiddenMessage.Text.Contains("Settings > Visible inputs") &&
+                        hiddenMessage.Height >= hiddenMessage.GetPreferredSize(new System.Drawing.Size(hiddenMessage.Width, 0)).Height &&
+                        hiddenMessage.Right <= inputPanel.ClientSize.Width)),
+                        $"All-hidden state directs users to Settings without clipping at {size}pt");
+                    Check(switches.Select(button => button.Text).SequenceEqual(labels) &&
+                        inputValues.Select(field => field.Text).SequenceEqual(originalValues),
+                        $"Visibility preserves custom names and VCP values for mask {mask} at {size}pt");
+                    Check(Enumerable.Range(0, 3).Where(i => expected[i]).All(i =>
+                        switches[i].Bottom <= inputPanel.RowStyles[0].Height &&
+                        switches[i].Height >= TextRenderer.MeasureText(switches[i].Text, switches[i].Font,
+                            new System.Drawing.Size(Math.Max(1, switches[i].Width - switches[i].Padding.Horizontal - 8), int.MaxValue),
+                            TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl | TextFormatFlags.NoPrefix).Height +
+                            switches[i].Padding.Vertical),
+                        $"Reflowed custom labels fit for mask {mask} at {size}pt");
+                }
+                main.Font = originalFont;
+            }
+            visibilityFields[0].Checked = visibilityFields[2].Checked = false;
+            main.SaveInputVisibility(visibilityPath);
+            Check(File.ReadAllText(combinedNamesPath) == originalNamesFile,
+                "Saving visibility leaves the persisted custom-name file unchanged");
+            using (var restarted = new MainForm())
+            {
+                restarted.LoadInputNames(combinedNamesPath);
+                restarted.LoadInputVisibility(visibilityPath);
+                var restoredFields = (CheckBox[])typeof(MainForm).GetField("visibilityFields",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(restarted)!;
+                var restoredTray = (ToolStripMenuItem[])typeof(MainForm).GetField("trayInputs",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(restarted)!;
+                Check(restoredFields.Select(field => field.Checked).SequenceEqual([false, true, false]) &&
+                    restoredTray.Select(item => item.Available).SequenceEqual([false, true, false]) &&
+                    restoredTray.Select(item => item.Text).SequenceEqual(labels.Select(label => label.Replace("&", "&&"))),
+                    "Restart restores saved visibility independently of custom names and VCP mappings");
+            }
+            foreach (var field in visibilityFields)
+                field.Checked = true;
+            main.SaveInputVisibility(visibilityPath);
+            Check(switches.All(button => button.Visible) && !hiddenMessage.Visible,
+                "All hidden inputs remain available in Settings and can be restored");
+        }
+        finally
+        {
+            main.Hide();
+            if (Directory.Exists(visibilityDirectory)) Directory.Delete(visibilityDirectory, recursive: true);
+        }
         typeof(MainForm).GetMethod("SetStatus",
             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.Invoke(main, [""]);
         foreach (float size in new[] { 10f, 16f, 24f })
@@ -490,6 +589,8 @@ var layoutThread = new Thread(() =>
             var namesPanel = (TableLayoutPanel)namesTabs.TabPages[2].Controls[0];
             namesPanel.PerformLayout();
             Check(nameFields.All(field => field.Width > 0 && field.Right <= namesPanel.ClientSize.Width) &&
+                visibilityFields.All(field => field.Right <= namesPanel.ClientSize.Width &&
+                    field.Height >= field.GetPreferredSize(System.Drawing.Size.Empty).Height) &&
                 namesPanel.Controls.OfType<Label>().All(label => label.Right <= namesPanel.ClientSize.Width),
                 $"Custom-name settings fit or scroll without clipping at {size}pt " +
                 $"(panel={namesPanel.ClientSize}, labels={string.Join("; ", namesPanel.Controls.OfType<Label>().Select(label => label.Bounds))})");

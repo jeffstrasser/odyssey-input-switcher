@@ -69,6 +69,28 @@ internal static class InputDisplayNames
     }
 }
 
+internal static class InputVisibility
+{
+    internal static Dictionary<string, bool> Resolve(Dictionary<string, bool?>? saved)
+    {
+        var visible = new Dictionary<string, bool>
+        {
+            ["DisplayPort"] = true,
+            ["HDMI"] = true,
+            ["Micro HDMI"] = true
+        };
+        if (saved is null)
+            return visible;
+        foreach (string identity in visible.Keys.ToArray())
+        {
+            if (!saved.TryGetValue(identity, out bool? value))
+                continue;
+            visible[identity] = value ?? throw new InvalidOperationException($"Saved visibility for {identity} is invalid.");
+        }
+        return visible;
+    }
+}
+
 internal interface IMonitorConnection : IDisposable
 {
     string Description { get; }

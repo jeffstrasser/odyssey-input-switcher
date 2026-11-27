@@ -47,9 +47,20 @@ internal sealed class MainForm : Form
     private readonly string[] inputNames = ["DisplayPort", "HDMI", "Micro HDMI"];
     private readonly string[] displayNames = ["DisplayPort", "HDMI", "Micro HDMI"];
     private readonly TextBox[] nameFields = new TextBox[3];
+    private readonly bool[] visibleInputs = [true, true, true];
+    private readonly CheckBox[] visibilityFields = new CheckBox[3];
+    private readonly Label allInputsHidden = new()
+    {
+        Text = "All inputs are hidden. Open Settings > Visible inputs... to show them again.",
+        AutoSize = true, Dock = DockStyle.Fill, Visible = false
+    };
     private readonly TextBox[] values = new TextBox[3];
     private readonly Button[] switches = new Button[3];
     private readonly ToolStripMenuItem[] trayInputs = new ToolStripMenuItem[3];
+    private readonly ToolStripMenuItem trayAllInputsHidden = new("All inputs hidden - Settings > Visible inputs...")
+    {
+        Enabled = false, Visible = false
+    };
     private readonly ToolStripMenuItem trayMonitor = new("Discovering monitors...") { Enabled = false };
     private readonly ToolStripMenuItem trayRefresh = new("Refresh monitors");
     private readonly ToolStripMenuItem trayUpdate = new("Check for updates...");
@@ -77,6 +88,7 @@ internal sealed class MainForm : Form
     private static string SettingsPath => Path.Combine(SettingsDirectory, "inputs.json");
     private static string PreferencesPath => Path.Combine(SettingsDirectory, "preferences.json");
     private static string InputNamesPath => Path.Combine(SettingsDirectory, "input-names.json");
+    private static string InputVisibilityPath => Path.Combine(SettingsDirectory, "input-visibility.json");
     private NativeMonitor? SelectedMonitor => !stale ? monitors.SelectedItem as NativeMonitor : null;
     internal event EventHandler? InitializationCompleted;
 
@@ -194,6 +206,7 @@ internal sealed class MainForm : Form
             initialized = true;
             LoadSettings();
             LoadInputNames(InputNamesPath);
+            LoadInputVisibility(InputVisibilityPath);
             LoadPreferences();
             RefreshStartupSetting();
             InitializationCompleted?.Invoke(this, EventArgs.Empty);
@@ -270,10 +283,11 @@ internal sealed class MainForm : Form
         }, 0, 5);
         var inputs = new TableLayoutPanel
         {
-            Dock = DockStyle.Top, AutoSize = true, RowCount = 1, ColumnCount = 3,
+            Dock = DockStyle.Top, AutoSize = true, RowCount = 2, ColumnCount = 3,
             Margin = new Padding(0, 6, 0, 10)
         };
         inputs.RowStyles.Add(new RowStyle(SizeType.Absolute, 60));
+        inputs.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         for (int i = 0; i < inputNames.Length; i++)
         {
             int index = i;
@@ -287,6 +301,8 @@ internal sealed class MainForm : Form
             inputs.Controls.Add(switches[i], i, 0);
             switches[i].FontChanged += (_, _) => SizeInputButtons(inputs);
         }
+        inputs.Controls.Add(allInputsHidden, 0, 1);
+        inputs.SetColumnSpan(allInputsHidden, 3);
         inputs.SizeChanged += (_, _) => SizeInputButtons(inputs);
         layout.Controls.Add(inputs, 0, 6);
         var footer = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top };
@@ -307,12 +323,21 @@ internal sealed class MainForm : Form
 
     private void SizeInputButtons(TableLayoutPanel inputs)
     {
-        int width = inputs.ClientSize.Width / 3;
+        int count = visibleInputs.Count(visible => visible);
+        if (count == 0)
+        {
+            inputs.RowStyles[0].Height = 0;
+            return;
+        }
+        int width = inputs.ClientSize.Width / count;
         if (width <= 0 || switches.Any(button => button is null))
             return;
         int height = (int)Math.Ceiling(60 * DeviceDpi / 96d);
-        foreach (var button in switches)
+        for (int i = 0; i < switches.Length; i++)
         {
+            if (!visibleInputs[i])
+                continue;
+            var button = switches[i];
             button.MaximumSize = new Size(Math.Max(1, width - button.Margin.Horizontal), 0);
             int textWidth = Math.Max(1, width - button.Margin.Horizontal - button.Padding.Horizontal - 8);
             var textSize = TextRenderer.MeasureText(button.Text, button.Font,
@@ -401,24 +426,26 @@ internal sealed class MainForm : Form
         settingsTab.Controls.Add(settingsLayout);
         settingsTabs.TabPages.Add(diagnosticTab);
         settingsTabs.TabPages.Add(settingsTab);
-        var namesTab = new TabPage("Input names")
+        var namesTab = new TabPage("Input names & visibility")
         {
             BackColor = Canvas, Padding = new Padding(16), AutoScroll = true
         };
         var namesLayout = new TableLayoutPanel
         {
-            Dock = DockStyle.Top, AutoSize = true, ColumnCount = 2, RowCount = 5
+            Dock = DockStyle.Top, AutoSize = true, ColumnCount = 3, RowCount = 5
         };
         namesLayout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         namesLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        namesLayout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         var namesExplanation = new Label
         {
             Text = $"Name each input after its connected device (1-{InputDisplayNames.MaximumLength} characters).\r\n" +
-                "Names change labels only, not input values or monitor commands.",
+                "Use Show to choose which inputs appear in the main window and tray.\r\n" +
+                "Save names and visibility separately. Neither changes input values or sends monitor commands.",
             AutoSize = true, Dock = DockStyle.Fill, Margin = new Padding(3, 0, 3, 20)
         };
         namesLayout.Controls.Add(namesExplanation, 0, 0);
-        namesLayout.SetColumnSpan(namesExplanation, 2);
+        namesLayout.SetColumnSpan(namesExplanation, 3);
         for (int i = 0; i < inputNames.Length; i++)
         {
             namesLayout.Controls.Add(new Label
@@ -431,6 +458,13 @@ internal sealed class MainForm : Form
                 AccessibleName = inputNames[i] + " display name"
             };
             namesLayout.Controls.Add(nameFields[i], 1, i + 1);
+            visibilityFields[i] = new CheckBox
+            {
+                Text = "Show", AutoSize = true, Checked = true,
+                AccessibleName = "Show " + inputNames[i] + " input",
+                Margin = new Padding(12, 6, 3, 10)
+            };
+            namesLayout.Controls.Add(visibilityFields[i], 2, i + 1);
         }
         var nameActions = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top };
         var restoreNames = MakeButton("Restore default names");
@@ -443,8 +477,11 @@ internal sealed class MainForm : Form
         saveNames.Click += (_, _) => SaveInputNames(InputNamesPath);
         nameActions.Controls.Add(restoreNames);
         nameActions.Controls.Add(saveNames);
+        var saveVisibility = MakeButton("Save visible inputs");
+        saveVisibility.Click += (_, _) => SaveInputVisibility(InputVisibilityPath);
+        nameActions.Controls.Add(saveVisibility);
         namesLayout.Controls.Add(nameActions, 0, 4);
-        namesLayout.SetColumnSpan(nameActions, 2);
+        namesLayout.SetColumnSpan(nameActions, 3);
         namesTab.Controls.Add(namesLayout);
         settingsTabs.TabPages.Add(namesTab);
         advanced.Controls.Add(settingsTabs);
@@ -463,6 +500,7 @@ internal sealed class MainForm : Form
             trayInputs[i].Click += async (_, _) => await SwitchAsync(index);
             trayMenu.Items.Add(trayInputs[i]);
         }
+        trayMenu.Items.Add(trayAllInputsHidden);
         trayMenu.Items.Add(new ToolStripSeparator());
         trayMenu.Items.Add("Show Odyssey", null, (_, _) => ShowMainWindow());
         trayRefresh.Click += (_, _) => QueueRefresh("Tray refresh");
@@ -518,6 +556,7 @@ internal sealed class MainForm : Form
         items.Add(new ToolStripSeparator());
         items.Add("Input & monitor settings...", null, (_, _) => ShowAdvanced(1));
         items.Add("Customize input names...", null, (_, _) => ShowAdvanced(2));
+        items.Add("Visible inputs...", null, (_, _) => ShowAdvanced(2));
         items.Add(defaultMonitor);
         items.Add("Diagnostics & logging...", null, (_, _) => ShowAdvanced(0));
         items.Add(new ToolStripSeparator());
@@ -603,7 +642,7 @@ internal sealed class MainForm : Form
             if (values[i] is null)
                 continue;
             values[i].Enabled = !busy;
-            bool enabled = selected && InputValue.TryParse(values[i].Text, out _);
+            bool enabled = selected && visibleInputs[i] && InputValue.TryParse(values[i].Text, out _);
             switches[i].Enabled = enabled;
             if (trayInputs[i] is not null)
                 trayInputs[i].Enabled = enabled;
@@ -848,7 +887,8 @@ internal sealed class MainForm : Form
     private async Task SwitchAsync(int index)
     {
         NativeMonitor? selected = SelectedMonitor;
-        if (busy || confirming || exiting || selected is null || !InputValue.TryParse(values[index].Text, out uint value))
+        if (!visibleInputs[index] || busy || confirming || exiting || selected is null ||
+            !InputValue.TryParse(values[index].Text, out uint value))
             return;
         int generation = displayGeneration;
         DialogResult answer;
@@ -1087,6 +1127,67 @@ internal sealed class MainForm : Form
             ApplyInputNames(names);
             Append("Saved input names to " + path);
             SetStatus("Input names saved.");
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            ReportSettingsFailure(error);
+        }
+    }
+
+    internal void LoadInputVisibility(string path)
+    {
+        try
+        {
+            if (!File.Exists(path))
+                return;
+            var stored = JsonSerializer.Deserialize<Dictionary<string, bool?>>(File.ReadAllText(path))
+                ?? throw new InvalidOperationException("Saved input visibility is empty.");
+            ApplyInputVisibility(InputVisibility.Resolve(stored));
+            Append("Loaded input visibility from " + path);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or
+            JsonException or InvalidOperationException)
+        {
+            ReportSettingsFailure(error);
+        }
+    }
+
+    private void ApplyInputVisibility(Dictionary<string, bool> visibility)
+    {
+        var inputs = (TableLayoutPanel)switches[0].Parent!;
+        inputs.SuspendLayout();
+        try
+        {
+            int count = visibility.Values.Count(visible => visible);
+            for (int i = 0; i < inputNames.Length; i++)
+            {
+                bool visible = visibility[inputNames[i]];
+                visibleInputs[i] = visibilityFields[i].Checked = visible;
+                switches[i].Visible = trayInputs[i].Visible = visible;
+                var column = inputs.ColumnStyles[i];
+                bool fill = visible || (count == 0 && i == 0);
+                column.SizeType = fill ? SizeType.Percent : SizeType.Absolute;
+                column.Width = fill ? 100f / Math.Max(1, count) : 0;
+            }
+            allInputsHidden.Visible = count == 0;
+            trayAllInputsHidden.Visible = count == 0;
+            SizeInputButtons(inputs);
+        }
+        finally { inputs.ResumeLayout(performLayout: true); }
+        UpdateControls();
+    }
+
+    internal void SaveInputVisibility(string path)
+    {
+        try
+        {
+            var visibility = new Dictionary<string, bool>();
+            for (int i = 0; i < inputNames.Length; i++)
+                visibility[inputNames[i]] = visibilityFields[i].Checked;
+            WriteSettings(path, visibility);
+            ApplyInputVisibility(visibility);
+            Append("Saved input visibility to " + path);
+            SetStatus("Input visibility saved.");
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
