@@ -104,6 +104,11 @@ internal sealed class MainForm : Form
     private bool explainedTray;
     private bool startInTray;
     private bool initializationQueued;
+    private readonly string windowPositionPath;
+    private WindowLocation? normalLocation;
+    private bool placementLoaded;
+    private bool positioningWindow;
+    private bool hasUserPlacement;
     private int displayGeneration;
     private static string SettingsDirectory => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "OdysseyInputSwitcher");
@@ -115,13 +120,14 @@ internal sealed class MainForm : Form
     internal event EventHandler? InitializationCompleted;
 
     internal MainForm(bool startInTray = false, TimeProvider? clock = null,
-        Func<ReleaseUpdater>? updaterFactory = null)
+        Func<ReleaseUpdater>? updaterFactory = null, string? windowPositionPath = null)
     {
         this.startInTray = startInTray;
+        this.windowPositionPath = windowPositionPath ?? Path.Combine(SettingsDirectory, "window-position.json");
         updateSchedule = new UpdateCheckSchedule(clock ?? TimeProvider.System);
         createUpdater = updaterFactory ?? (() => new ReleaseUpdater());
         Text = AppName;
-        StartPosition = FormStartPosition.CenterScreen;
+        StartPosition = FormStartPosition.Manual;
         AutoScaleMode = AutoScaleMode.Dpi;
         Font = new Font("Segoe UI", 9);
         BackColor = Canvas;
@@ -201,8 +207,15 @@ internal sealed class MainForm : Form
             if (WindowState == FormWindowState.Minimized)
                 Hide();
         };
+        ResizeEnd += (_, _) => SaveWindowPosition();
+        VisibleChanged += (_, _) =>
+        {
+            if (!Visible)
+                SaveWindowPosition();
+        };
         FormClosing += (_, e) =>
         {
+            SaveWindowPosition();
             if (!exiting)
             {
                 e.Cancel = true;
@@ -223,7 +236,11 @@ internal sealed class MainForm : Form
                 SetStatus("Waiting for the current operation before exiting...");
             }
         };
-        Layout += (_, _) => SetScaledMinimumSize();
+        Layout += (_, _) =>
+        {
+            SetScaledMinimumSize();
+            RestoreWindowPosition();
+        };
         UpdateControls();
     }
 
@@ -282,6 +299,70 @@ internal sealed class MainForm : Form
     {
         base.OnLoad(e);
         SetScaledMinimumSize();
+        if (!placementLoaded)
+        {
+            try
+            {
+                if (File.Exists(windowPositionPath))
+                {
+                    normalLocation = JsonSerializer.Deserialize<WindowLocation>(File.ReadAllText(windowPositionPath))
+                        ?? throw new InvalidOperationException("Saved main-window position is empty.");
+                    hasUserPlacement = true;
+                }
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or
+                JsonException or InvalidOperationException)
+            {
+                ReportSettingsFailure(error);
+            }
+            placementLoaded = true;
+        }
+        RestoreWindowPosition();
+    }
+
+    protected override void OnShown(EventArgs e)
+    {
+        base.OnShown(e);
+        RestoreWindowPosition();
+    }
+
+    protected override void OnLocationChanged(EventArgs e)
+    {
+        base.OnLocationChanged(e);
+        if (placementLoaded && !positioningWindow && Visible && WindowState == FormWindowState.Normal)
+        {
+            normalLocation = new WindowLocation { X = Left, Y = Top };
+            hasUserPlacement = true;
+        }
+    }
+
+    private void RestoreWindowPosition()
+    {
+        if (!placementLoaded || positioningWindow || resourcesDisposed || WindowState != FormWindowState.Normal)
+            return;
+        positioningWindow = true;
+        try
+        {
+            var areas = Screen.AllScreens.Select(screen => screen.WorkingArea).ToArray();
+            var primary = (Screen.PrimaryScreen ?? Screen.FromControl(this)).WorkingArea;
+            Location = WindowPlacement.Resolve(hasUserPlacement ? normalLocation : null, Size, areas, primary);
+            normalLocation = new WindowLocation { X = Left, Y = Top };
+        }
+        finally { positioningWindow = false; }
+    }
+
+    private void SaveWindowPosition()
+    {
+        if (!placementLoaded || normalLocation is null || resourcesDisposed || positioningWindow)
+            return;
+        try
+        {
+            WriteSettings(windowPositionPath, normalLocation);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            ReportSettingsFailure(error);
+        }
     }
 
     protected override void OnHandleCreated(EventArgs e)
@@ -337,6 +418,7 @@ internal sealed class MainForm : Form
     {
         base.OnDpiChanged(e);
         SetScaledMinimumSize();
+        RestoreWindowPosition();
     }
 
     private void SetScaledMinimumSize()
@@ -729,8 +811,9 @@ internal sealed class MainForm : Form
     private void ShowMainWindow()
     {
         startInTray = false;
-        Show();
         WindowState = FormWindowState.Normal;
+        RestoreWindowPosition();
+        Show();
         Activate();
         PresentProfileSetup();
     }
@@ -1586,6 +1669,7 @@ internal sealed class MainForm : Form
         if (message.Msg == WmDisplayChange || resumed)
         {
             displayGeneration++;
+            RestoreWindowPosition();
             if (initialized)
                 QueueRefresh(resumed ? "Windows resumed" : "Windows display change");
         }

@@ -10,6 +10,7 @@
   <ItemGroup>
     <Compile Include="..\InputValue.cs" Link="InputValue.cs" />
     <Compile Include="..\MonitorProfiles.cs" Link="MonitorProfiles.cs" />
+    <Compile Include="..\WindowPlacement.cs" Link="WindowPlacement.cs" />
     <Compile Include="..\NativeMonitor.cs" Link="NativeMonitor.cs" />
     <Compile Include="..\MonitorSelection.cs" Link="MonitorSelection.cs" />
     <Compile Include="..\ReleaseUpdater.cs" Link="ReleaseUpdater.cs" />

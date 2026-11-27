@@ -134,6 +134,23 @@ try
     }
 }
 finally { Directory.Delete(profilesDirectory, recursive: true); }
+var primaryArea = new System.Drawing.Rectangle(0, 0, 1920, 1040);
+var secondaryArea = new System.Drawing.Rectangle(-1280, 0, 1280, 984);
+var windowSize = new System.Drawing.Size(500, 240);
+Check(WindowPlacement.Resolve(null, windowSize, [secondaryArea, primaryArea], primaryArea) ==
+    new System.Drawing.Point(710, 400), "First launch centers on the primary working area, not the cursor's monitor");
+Check(WindowPlacement.Resolve(new WindowLocation { X = -1000, Y = 200 }, windowSize,
+    [secondaryArea, primaryArea], primaryArea) == new System.Drawing.Point(-1000, 200),
+    "Remember positions on secondary displays with negative coordinates");
+Check(WindowPlacement.Resolve(new WindowLocation { X = -1000, Y = 200 }, windowSize,
+    [primaryArea], primaryArea) == new System.Drawing.Point(710, 400),
+    "Disconnected displays fall back to the primary display center");
+Check(WindowPlacement.Resolve(new WindowLocation { X = 1800, Y = 950 }, windowSize,
+    [primaryArea], primaryArea) == new System.Drawing.Point(1420, 800),
+    "Clamp partly off-screen windows after resolution or DPI changes");
+Check(WindowPlacement.Resolve(new WindowLocation { X = int.MaxValue, Y = int.MinValue }, windowSize,
+    [primaryArea], primaryArea) == new System.Drawing.Point(710, 400),
+    "Extreme saved coordinates recover without arithmetic overflow");
 Check(InputVisibility.Resolve(null).Values.All(visible => visible),
     "All inputs are visible by default for existing installations");
 var visibilitySettings = InputVisibility.Resolve(new Dictionary<string, bool?> { ["HDMI"] = false });
@@ -457,6 +474,8 @@ UiTests:
 Exception? layoutError = null;
 var layoutThread = new Thread(() =>
 {
+    string placementDirectory = Path.Combine(Path.GetTempPath(), "OdysseyPlacementUi-" + Guid.NewGuid());
+    string placementPath = Path.Combine(placementDirectory, "position.json");
     try
     {
         Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
@@ -494,7 +513,8 @@ var layoutThread = new Thread(() =>
             };
         });
         using (var daily = new MainForm(startInTray: true, clock: updateClock,
-            updaterFactory: () => new ReleaseUpdater(new HttpClient(updateHandler, disposeHandler: false))))
+            updaterFactory: () => new ReleaseUpdater(new HttpClient(updateHandler, disposeHandler: false)),
+            windowPositionPath: placementPath))
         {
             var fields = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
             var state = typeof(MainForm).GetMethod("SetStatus", fields)!;
@@ -557,7 +577,7 @@ var layoutThread = new Thread(() =>
         }
         if (args.Contains("--daily-updates-only"))
             return;
-        using (var generic = new MainForm(startInTray: true))
+        using (var generic = new MainForm(startInTray: true, windowPositionPath: placementPath))
         {
             var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
             var monitorList = (ComboBox)typeof(MainForm).GetField("monitors", flags)!.GetValue(generic)!;
@@ -603,7 +623,7 @@ var layoutThread = new Thread(() =>
             }
             finally { if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true); }
         }
-        using (var hidden = new MainForm(startInTray: true))
+        using (var hidden = new MainForm(startInTray: true, windowPositionPath: placementPath))
         {
             hidden.Show();
             Check(!hidden.Visible && hidden.IsHandleCreated,
@@ -622,7 +642,7 @@ var layoutThread = new Thread(() =>
         foreach (bool fromTray in new[] { false, true })
         foreach (string pendingOperation in new[] { "none", "busy", "confirming" })
         {
-            using var waiting = new MainForm(startInTray: true);
+            using var waiting = new MainForm(startInTray: true, windowPositionPath: placementPath);
             _ = waiting.Handle;
             var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
             var pending = pendingOperation == "none" ? null : typeof(MainForm).GetField(pendingOperation, flags)!;
@@ -645,7 +665,38 @@ var layoutThread = new Thread(() =>
         }
         // Forms must be disposed before the shared font used during their paint/teardown.
         using var originalFont = new System.Drawing.Font("Segoe UI", 9);
-        using var main = new MainForm();
+        using (var firstLaunch = new MainForm(windowPositionPath: placementPath))
+        {
+            if (File.Exists(placementPath)) File.Delete(placementPath);
+            firstLaunch.Show();
+            var area = Screen.PrimaryScreen!.WorkingArea;
+            Check(firstLaunch.Location == WindowPlacement.Resolve(null, firstLaunch.Size, [area], area),
+                "First shown main form is centered after its layout is complete");
+            var remembered = new System.Drawing.Point(area.Left + 30, area.Top + 40);
+            firstLaunch.Location = remembered;
+            firstLaunch.Hide();
+            Check(JsonSerializer.Deserialize<WindowLocation>(File.ReadAllText(placementPath)) is { } position &&
+                position.X == remembered.X && position.Y == remembered.Y,
+                "Hiding the main window persists its last normal location");
+            typeof(MainForm).GetMethod("ShowMainWindow",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.Invoke(firstLaunch, null);
+            Check(firstLaunch.Location == remembered, "Tray reopening preserves the user's window position");
+            firstLaunch.WindowState = FormWindowState.Minimized;
+            Check(JsonSerializer.Deserialize<WindowLocation>(File.ReadAllText(placementPath)) is { } minimizedPosition &&
+                minimizedPosition.X == remembered.X && minimizedPosition.Y == remembered.Y,
+                "Minimizing never persists minimized window coordinates");
+        }
+        using (var restartedPosition = new MainForm(startInTray: true, windowPositionPath: placementPath))
+        {
+            restartedPosition.Show();
+            Check(!restartedPosition.Visible, "Position restoration does not show a tray-started main form");
+            typeof(MainForm).GetMethod("ShowMainWindow",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.Invoke(restartedPosition, null);
+            var area = Screen.PrimaryScreen!.WorkingArea;
+            Check(restartedPosition.Location == new System.Drawing.Point(area.Left + 30, area.Top + 40),
+                "A new app instance restores the persisted main-window location when opened");
+        }
+        using var main = new MainForm(windowPositionPath: placementPath);
         var menu = main.MainMenuStrip ?? throw new Exception("Standard menu bar is missing.");
         var settingsMenu = (ToolStripMenuItem)menu.Items[0];
         string[] expectedMenu = ["&General...", "&Inputs...", "&Advanced...", "Check for updates...",
@@ -749,7 +800,7 @@ var layoutThread = new Thread(() =>
             var namesFromDisk = JsonSerializer.Deserialize<Dictionary<string, string?>>(File.ReadAllText(namesPath))!;
             Check(namesFromDisk.Keys.Order().SequenceEqual(new[] { "DisplayPort", "HDMI", "Micro HDMI" }.Order()),
                 "Names persist under stable input identities");
-            using (var restarted = new MainForm())
+            using (var restarted = new MainForm(windowPositionPath: placementPath))
             {
                 restarted.LoadInputNames(namesPath);
                 var restoredButtons = (Button[])typeof(MainForm).GetField("switches",
@@ -836,7 +887,7 @@ var layoutThread = new Thread(() =>
             main.SaveInputVisibility(visibilityPath);
             Check(File.ReadAllText(combinedNamesPath) == originalNamesFile,
                 "Saving visibility leaves the persisted custom-name file unchanged");
-            using (var restarted = new MainForm())
+            using (var restarted = new MainForm(windowPositionPath: placementPath))
             {
                 restarted.LoadInputNames(combinedNamesPath);
                 restarted.LoadInputVisibility(visibilityPath);
@@ -1032,6 +1083,7 @@ var layoutThread = new Thread(() =>
         }
     }
     catch (Exception error) { layoutError = error; }
+    finally { if (Directory.Exists(placementDirectory)) Directory.Delete(placementDirectory, recursive: true); }
 });
 layoutThread.SetApartmentState(ApartmentState.STA);
 layoutThread.Start();

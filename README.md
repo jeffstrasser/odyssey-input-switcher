@@ -39,6 +39,8 @@ Discovery refreshes automatically after input-switch attempts, display-topology 
 
 The main and settings windows have fixed borders: they cannot be manually resized or maximized. The app still uses per-monitor DPI scaling when moved between displays. The compact main window uses a 440-pixel logical minimum client width, smaller buttons, and content-sized height, with no empty status row when idle. Hover over any button for an explanation.
 
+The main window first opens centered within the primary display's working area. After you move it, its normal position is saved on finishing a move, hiding, or closing, and restored on subsequent launches and tray reopenings. Position is stored separately in `%LOCALAPPDATA%\OdysseyInputSwitcher\window-position.json`. Disconnected displays cause a fallback to the primary display center; partly off-screen windows are moved into the available working area after display or DPI changes. Tray startup does not show the window to restore its position.
+
 Settings open centered over the main window and grow to fit every tab without scrolling or cutting off actions. The window width adapts to the font and DPI, up to the display's working width. If all tabs cannot fit on screen, the window sizes to the selected tab; scrolling is available only when that tab's content also exceeds the screen. Each settings button has a visible description beside it explaining what it changes and whether a separate Save is needed. The diagnostic log retains its own scrollbars.
 
 The input confirmation grows to fit its full warning and buttons at larger font sizes. The main window scrolls when its content cannot fit, and input buttons size to their text.
