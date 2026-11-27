@@ -490,14 +490,33 @@ var layoutThread = new Thread(() =>
                 System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.Invoke(hidden, null);
             Check(hidden.Visible, "Showing Odyssey exits hidden-startup mode");
             hidden.Hide();
+            ((ToolStripMenuItem)hidden.MainMenuStrip!.Items[0]).DropDownItems
+                .OfType<ToolStripMenuItem>().Single(item => item.Text == "E&xit").PerformClick();
+            Check(hidden.IsDisposed, "Settings Exit stops the hidden app rather than hiding it again");
+        }
+        foreach (string pendingOperation in new[] { "busy", "confirming" })
+        {
+            using var waiting = new MainForm(startInTray: true);
+            _ = waiting.Handle;
+            var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+            var pending = typeof(MainForm).GetField(pendingOperation, flags)!;
+            pending.SetValue(waiting, true);
+            var exit = ((ToolStripMenuItem)waiting.MainMenuStrip!.Items[0]).DropDownItems
+                .OfType<ToolStripMenuItem>().Single(item => item.Text == "E&xit");
+            exit.PerformClick();
+            Check(!waiting.IsDisposed && (bool)typeof(MainForm).GetField("closeWhenIdle", flags)!.GetValue(waiting)!,
+                $"Settings Exit waits for an outstanding {pendingOperation} operation");
+            pending.SetValue(waiting, false);
+            exit.PerformClick();
+            Check(waiting.IsDisposed, $"Settings Exit completes once {pendingOperation} is cleared");
         }
         using var main = new MainForm();
         var menu = main.MainMenuStrip ?? throw new Exception("Standard menu bar is missing.");
         var settingsMenu = (ToolStripMenuItem)menu.Items[0];
-        string[] expectedMenu = ["&General...", "&Inputs...", "&Advanced...", "Check for updates...", "About Odyssey..."];
+        string[] expectedMenu = ["&General...", "&Inputs...", "&Advanced...", "Check for updates...", "About Odyssey...", "E&xit"];
         Check(settingsMenu.Text == "&Settings" && settingsMenu.DropDownItems.OfType<ToolStripMenuItem>()
             .Select(item => item.Text).SequenceEqual(expectedMenu),
-            "Standard Settings menu exposes preferences, logging, updates and About with a keyboard mnemonic");
+            "Standard Settings menu exposes preferences, logging, updates, About and Exit with keyboard mnemonics");
         var mainLayout = main.Controls.OfType<TableLayoutPanel>().Single();
         var footer = (FlowLayoutPanel)mainLayout.GetControlFromPosition(0, 7)!;
         Check(footer.Controls.OfType<Button>().Select(button => button.Text).SequenceEqual(["Run in tray"]),
@@ -543,16 +562,13 @@ var layoutThread = new Thread(() =>
         var inputValues = (TextBox[])typeof(MainForm).GetField("values",
             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(main)!;
         string[] valuesBeforeNavigation = inputValues.Select(field => field.Text).ToArray();
-        foreach (var settings in new[] { settingsMenu })
+        for (int index = 0; index < 3; index++)
         {
-            for (int index = 0; index < 3; index++)
-            {
-                settings.DropDownItems[index].PerformClick();
-                Check(advanced.Visible && settingsTabs.SelectedIndex == index,
-                    $"{settings.Text} shortcut opens the matching settings section {index}");
-                advanced.Hide();
-                main.Hide();
-            }
+            settingsMenu.DropDownItems[index].PerformClick();
+            Check(advanced.Visible && settingsTabs.SelectedIndex == index,
+                $"{settingsMenu.Text} shortcut opens the matching settings section {index}");
+            advanced.Hide();
+            main.Hide();
         }
         Check(inputValues.Select(field => field.Text).SequenceEqual(valuesBeforeNavigation),
             "Opening settings from the main menu preserves staged VCP values");

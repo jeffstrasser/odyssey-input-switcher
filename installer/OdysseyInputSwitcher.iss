@@ -56,7 +56,7 @@ const
 function InitializeSetup(): Boolean;
 begin
   if not WizardSilent then
-    MsgBox('Close Odyssey using Exit in its tray menu before installing or upgrading.' + #13#10 +
+    MsgBox('Close Odyssey before installing or upgrading: use Exit in older tray menus, or double-click the tray icon and choose Settings > Exit.' + #13#10 +
       'Installation preserves your saved settings and does not enable Windows startup.',
       mbInformation, MB_OK);
   Result := True;

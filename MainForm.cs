@@ -183,7 +183,7 @@ internal sealed class MainForm : Form
                 {
                     explainedTray = true;
                     tray.ShowBalloonTip(4000, "Odyssey is still running",
-                        "Right-click the monitor icon to switch inputs or exit.", ToolTipIcon.Info);
+                        "Right-click the monitor icon to switch inputs. Double-click it for Settings > Exit.", ToolTipIcon.Info);
                 }
 
             }
@@ -595,6 +595,8 @@ internal sealed class MainForm : Form
         update.Click += async (_, _) => await CheckForUpdatesAsync(manual: true);
         items.Add(update);
         items.Add("About Odyssey...", null, (_, _) => ShowAbout());
+        items.Add(new ToolStripSeparator());
+        items.Add("E&xit", null, (_, _) => ExitApplication());
     }
 
     private void ShowAbout()
