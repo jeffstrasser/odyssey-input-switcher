@@ -35,7 +35,7 @@ function Get-StartupCommand {
 $startupBefore = Get-StartupCommand
 $settings = Join-Path $env:LOCALAPPDATA 'OdysseyInputSwitcher'
 $settingsBefore = @{}
-foreach ($name in @('inputs.json', 'preferences.json')) {
+foreach ($name in @('inputs.json', 'preferences.json', 'input-names.json', 'input-visibility.json', 'monitor-profiles.json')) {
     $path = Join-Path $settings $name
     if (Test-Path -LiteralPath $path) { $settingsBefore[$name] = (Get-FileHash -LiteralPath $path).Hash }
 }
@@ -47,6 +47,15 @@ try {
     if (!$process.WaitForExit(120000)) { Stop-Process -Id $process.Id; throw 'Installer timed out.' }
     if ($process.ExitCode -ne 0) { throw "Installer failed: $($process.ExitCode). See $directory\install.log" }
     $installed = $true
+    $shortcut = Join-Path ([Environment]::GetFolderPath('Programs')) "$group\Connected Display Input Selector.lnk"
+    if (!(Test-Path -LiteralPath $shortcut)) { throw 'The renamed Start menu shortcut is missing.' }
+    $installedKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey(
+        'Software\Microsoft\Windows\CurrentVersion\Uninstall\{29D7D90B-4F22-4F2E-AF74-476F234D7E42}_is1')
+    try {
+        if (!$installedKey -or $installedKey.GetValue('DisplayName') -notlike 'Connected Display Input Selector*') {
+            throw 'Installed apps does not show the new product name.'
+        }
+    } finally { if ($installedKey) { $installedKey.Dispose() } }
     $exe = Join-Path $app 'OdysseyInputSwitcher.exe'
     if ((Get-FileHash -LiteralPath $exe).Hash -ne (Get-FileHash -LiteralPath $payload).Hash) {
         throw 'The installer selected the wrong native payload.'

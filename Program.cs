@@ -31,7 +31,7 @@ internal static class Program
             {
                 MessageBox.Show(error.Message + "\r\n\r\nIf installation failed, the previous executable is retained. " +
                     "You can download a release manually from " + ReleaseUpdater.RepositoryUrl + "/releases/latest.",
-                    "Odyssey update failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    MainForm.AppName + " update failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 if (args[0] != "--cleanup-update")
                     return;
             }
@@ -48,7 +48,7 @@ internal static class Program
                 }
                 catch (Exception error)
                 {
-                    MessageBox.Show(form, error.Message, "Odyssey update cleanup failed",
+                    MessageBox.Show(form, error.Message, MainForm.AppName + " update cleanup failed",
                         MessageBoxButtons.OK, MessageBoxIcon.Error);
                 }
             };

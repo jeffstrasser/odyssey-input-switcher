@@ -648,7 +648,8 @@ var layoutThread = new Thread(() =>
         using var main = new MainForm();
         var menu = main.MainMenuStrip ?? throw new Exception("Standard menu bar is missing.");
         var settingsMenu = (ToolStripMenuItem)menu.Items[0];
-        string[] expectedMenu = ["&General...", "&Inputs...", "&Advanced...", "Check for updates...", "About Odyssey...", "E&xit"];
+        string[] expectedMenu = ["&General...", "&Inputs...", "&Advanced...", "Check for updates...",
+            "About Connected Display Input Selector...", "E&xit"];
         Check(settingsMenu.Text == "&Settings" && settingsMenu.DropDownItems.OfType<ToolStripMenuItem>()
             .Select(item => item.Text).SequenceEqual(expectedMenu),
             "Standard Settings menu exposes preferences, logging, updates, About and Exit with keyboard mnemonics");

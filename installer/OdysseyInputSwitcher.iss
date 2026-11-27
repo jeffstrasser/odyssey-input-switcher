@@ -11,14 +11,15 @@
 
 [Setup]
 AppId={{29D7D90B-4F22-4F2E-AF74-476F234D7E42}
-AppName=Odyssey Input Switcher
+AppName=Connected Display Input Selector
 AppVersion={#AppVersion}
 AppPublisher=Jeffrey Strasser
 AppPublisherURL=https://github.com/jeffstrasser/odyssey-input-switcher
 AppSupportURL=https://github.com/jeffstrasser/odyssey-input-switcher/issues
 AppUpdatesURL=https://github.com/jeffstrasser/odyssey-input-switcher/releases
 DefaultDirName={localappdata}\Programs\Odyssey Input Switcher
-DefaultGroupName=Odyssey Input Switcher
+DefaultGroupName=Connected Display Input Selector
+UsePreviousGroup=no
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible or arm64
@@ -45,21 +46,38 @@ Source: "{#RepoRoot}dist\win-arm64\OdysseyInputSwitcher.exe"; DestDir: "{app}"; 
 Source: "{#RepoRoot}README.md"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\Odyssey Input Switcher"; Filename: "{app}\OdysseyInputSwitcher.exe"; WorkingDir: "{app}"
-Name: "{userdesktop}\Odyssey Input Switcher"; Filename: "{app}\OdysseyInputSwitcher.exe"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{group}\Connected Display Input Selector"; Filename: "{app}\OdysseyInputSwitcher.exe"; WorkingDir: "{app}"
+Name: "{userdesktop}\Connected Display Input Selector"; Filename: "{app}\OdysseyInputSwitcher.exe"; WorkingDir: "{app}"; Tasks: desktopicon
+
+[InstallDelete]
+Type: files; Name: "{userprograms}\Odyssey Input Switcher\Odyssey Input Switcher.lnk"; Check: WasLegacyInstall
+Type: files; Name: "{userdesktop}\Odyssey Input Switcher.lnk"; Check: WasLegacyInstall
 
 [Run]
-Filename: "{app}\OdysseyInputSwitcher.exe"; Description: "Launch Odyssey Input Switcher"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\OdysseyInputSwitcher.exe"; Description: "Launch Connected Display Input Selector"; Flags: nowait postinstall skipifsilent
 
 [Code]
 const
   StartupKey = 'Software\Microsoft\Windows\CurrentVersion\Run';
   StartupValue = 'OdysseyInputSwitcher';
 
-function InitializeSetup(): Boolean;
+var
+  LegacyInstall: Boolean;
+
+function WasLegacyInstall(): Boolean;
 begin
+  Result := LegacyInstall;
+end;
+
+function InitializeSetup(): Boolean;
+var
+  PreviousName: String;
+begin
+  LegacyInstall := RegQueryStringValue(HKCU,
+    'Software\Microsoft\Windows\CurrentVersion\Uninstall\{29D7D90B-4F22-4F2E-AF74-476F234D7E42}_is1',
+    'DisplayName', PreviousName) and (CompareText(PreviousName, 'Odyssey Input Switcher') = 0);
   if not WizardSilent then
-    MsgBox('Close Odyssey before installing or upgrading: use Exit in older tray menus, or double-click the tray icon and choose Settings > Exit.' + #13#10 +
+    MsgBox('Close Connected Display Input Selector before installing or upgrading: use Quit in the tray menu, or Settings > Exit.' + #13#10 +
       'Installation preserves your saved settings and does not enable Windows startup.',
       mbInformation, MB_OK);
   Result := True;

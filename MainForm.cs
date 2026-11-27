@@ -7,6 +7,7 @@ namespace OdysseyInputSwitcher;
 
 internal sealed class MainForm : Form
 {
+    internal const string AppName = "Connected Display Input Selector";
     private static readonly Color Canvas = Color.FromArgb(245, 247, 251);
     private static readonly Color Ink = Color.FromArgb(28, 39, 58);
     private static readonly Color Accent = Color.FromArgb(36, 91, 219);
@@ -119,7 +120,7 @@ internal sealed class MainForm : Form
         this.startInTray = startInTray;
         updateSchedule = new UpdateCheckSchedule(clock ?? TimeProvider.System);
         createUpdater = updaterFactory ?? (() => new ReleaseUpdater());
-        Text = "Odyssey Input Switcher";
+        Text = AppName;
         StartPosition = FormStartPosition.CenterScreen;
         AutoScaleMode = AutoScaleMode.Dpi;
         Font = new Font("Segoe UI", 9);
@@ -210,7 +211,7 @@ internal sealed class MainForm : Form
                 if (!explainedTray)
                 {
                     explainedTray = true;
-                    tray.ShowBalloonTip(4000, "Odyssey is still running",
+                    tray.ShowBalloonTip(4000, AppName + " is still running",
                         "Right-click the monitor icon to switch inputs or Quit. Double-click it for Settings.", ToolTipIcon.Info);
                 }
 
@@ -414,7 +415,7 @@ internal sealed class MainForm : Form
             AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Dock = DockStyle.Top
         };
         var hide = MakeButton("Run in tray");
-        DescribeButton(hide, "Hide this window and keep Odyssey running. Double-click the tray icon to reopen.");
+        DescribeButton(hide, "Hide this window and keep the app running. Double-click the tray icon to reopen.");
         hide.Click += (_, _) => { advanced.Hide(); Hide(); };
         footer.Controls.Add(hide);
         layout.Controls.Add(footer, 0, 5);
@@ -460,7 +461,7 @@ internal sealed class MainForm : Form
 
     private void BuildAdvancedWindow()
     {
-        advanced.Text = "Odyssey - Settings";
+        advanced.Text = AppName + " - Settings";
         advanced.Font = Font;
         advanced.BackColor = Canvas;
         advanced.ForeColor = Ink;
@@ -728,7 +729,7 @@ internal sealed class MainForm : Form
         trayMenu.Items.Add("&Quit", null, (_, _) => ExitApplication());
         trayMenu.Opening += (_, _) => UpdateControls();
         tray.Icon = Icon;
-        tray.Text = "Odyssey Input Switcher";
+        tray.Text = AppName;
         tray.ContextMenuStrip = trayMenu;
         tray.DoubleClick += (_, _) => ShowMainWindow();
         tray.Visible = true;
@@ -766,7 +767,7 @@ internal sealed class MainForm : Form
         items.Add(new ToolStripSeparator());
         update.Click += async (_, _) => await CheckForUpdatesAsync(manual: true);
         items.Add(update);
-        items.Add("About Odyssey...", null, (_, _) => ShowAbout());
+        items.Add("About " + AppName + "...", null, (_, _) => ShowAbout());
         items.Add(new ToolStripSeparator());
         items.Add("E&xit", null, (_, _) => ExitApplication());
     }
@@ -775,13 +776,13 @@ internal sealed class MainForm : Form
     {
         ShowMainWindow();
         MessageBox.Show(this,
-            "Odyssey Input Switcher\r\n" +
+            AppName + "\r\n" +
             $"Version: {ReleaseUpdater.FormatVersion(ReleaseUpdater.CurrentVersion)}\r\n" +
             "Creator: Jeffrey Strasser (jeffstrasser)\r\n" +
             $"Architecture: {RuntimeInformation.ProcessArchitecture}\r\n\r\n" +
             "Switch monitor inputs using Windows DDC/CI.\r\n\r\n" +
             ReleaseUpdater.RepositoryUrl,
-            "About Odyssey Input Switcher", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            "About " + AppName, MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
 
     private void RefreshStartupSetting()
@@ -802,10 +803,10 @@ internal sealed class MainForm : Form
         Append("Settings failed: " + error);
         SetStatus("Settings could not be updated.");
         if (startInTray)
-            tray.ShowBalloonTip(5000, "Odyssey settings failed", error.Message, ToolTipIcon.Error);
+            tray.ShowBalloonTip(5000, AppName + " settings failed", error.Message, ToolTipIcon.Error);
         else
             MessageBox.Show(advanced.Visible ? advanced : this, error.Message,
-                "Odyssey settings failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                AppName + " settings failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
     }
 
     private void ExitApplication()
@@ -847,7 +848,7 @@ internal sealed class MainForm : Form
         settingsMonitor.Text = $"Selected: {monitor?.DisplayName ?? "none"}\r\n" +
             $"Saved default: {preferences.DefaultMonitorId ?? "none"}";
         trayMonitor.Text = monitor is null ? "No monitor selected" : monitor.DisplayName;
-        string trayText = monitor is null ? "Odyssey - no monitor selected" : "Odyssey - " + monitor.DisplayName;
+        string trayText = AppName + " - " + (monitor?.DisplayName ?? "no monitor selected");
         tray.Text = trayText[..Math.Min(63, trayText.Length)];
         for (int i = 0; i < switches.Length; i++)
         {
@@ -914,7 +915,7 @@ internal sealed class MainForm : Form
     private void NotifyUpdateAvailable(ReleaseUpdate update)
     {
         Append($"Version {ReleaseUpdater.FormatVersion(update.Version)} is available. Open Settings > Check for updates to upgrade.");
-        tray.ShowBalloonTip(5000, "Odyssey update available",
+        tray.ShowBalloonTip(5000, AppName + " update available",
             $"Version {ReleaseUpdater.FormatVersion(update.Version)} is available. Open Settings > Check for updates.", ToolTipIcon.Info);
     }
 
@@ -954,7 +955,7 @@ internal sealed class MainForm : Form
                     SetStatus("No newer stable release is available.");
                     if (manual)
                         MessageBox.Show(this, "No newer stable release is available.",
-                            "Odyssey updates", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                            AppName + " updates", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     return;
                 }
                 if (startInTray && !manual)
@@ -965,8 +966,8 @@ internal sealed class MainForm : Form
                 ShowMainWindow();
                 if (MessageBox.Show(this,
                     $"Version {ReleaseUpdater.FormatVersion(update.Version)} is available (installed: {ReleaseUpdater.FormatVersion(ReleaseUpdater.CurrentVersion)}).\r\n\r\n" +
-                    "Download and install it now? Odyssey will close and restart. Your settings will be kept.",
-                    "Odyssey update available", MessageBoxButtons.YesNo, MessageBoxIcon.Question,
+                    "Download and install it now? The app will close and restart. Your settings will be kept.",
+                    AppName + " update available", MessageBoxButtons.YesNo, MessageBoxIcon.Question,
                     MessageBoxDefaultButton.Button2) != DialogResult.Yes || exiting)
                 {
                     SetStatus("Update declined. Use Settings > Check for updates... to check again.");
@@ -982,7 +983,7 @@ internal sealed class MainForm : Form
                     return;
                 ReleaseUpdater.StartInstaller(stagedDirectory);
                 installerStarted = true;
-                Append($"Installing version {ReleaseUpdater.FormatVersion(update.Version)}; restarting Odyssey.");
+                Append($"Installing version {ReleaseUpdater.FormatVersion(update.Version)}; restarting {AppName}.");
                 ExitApplication();
             }
             catch (OperationCanceledException) when (updateCancellation.IsCancellationRequested)
@@ -996,7 +997,7 @@ internal sealed class MainForm : Form
                 if (!exiting)
                 {
                     if (manual || approved)
-                        MessageBox.Show(this, error.Message, "Odyssey update failed",
+                        MessageBox.Show(this, error.Message, AppName + " update failed",
                             MessageBoxButtons.OK, MessageBoxIcon.Error);
                     else
                         tray.ShowBalloonTip(5000, "Update check failed",
@@ -1013,7 +1014,7 @@ internal sealed class MainForm : Form
                         Append("Update staging cleanup failed: " + error);
                         if (!exiting)
                             MessageBox.Show(this, "Temporary update files could not be removed:\r\n" + error.Message,
-                                "Odyssey update cleanup failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                                AppName + " update cleanup failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     }
                 }
             }
@@ -1030,11 +1031,11 @@ internal sealed class MainForm : Form
     {
         SetStatus("Operation failed. Open Settings > Advanced > Diagnostics for details.");
         Append(error.ToString());
-        tray.ShowBalloonTip(5000, "Odyssey operation failed", error.Message, ToolTipIcon.Error);
+        tray.ShowBalloonTip(5000, AppName + " operation failed", error.Message, ToolTipIcon.Error);
         if (showDialog)
             MessageBox.Show(advanced.Visible ? advanced : Visible ? this : null, error.Message +
                 "\r\n\r\nSee Settings > Advanced > Diagnostics for details. The DDC/CI connection may be unavailable.",
-                "Odyssey Input Switcher", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                AppName, MessageBoxButtons.OK, MessageBoxIcon.Error);
     }
 
     private async Task RunAsync(Func<Task> operation, bool showErrors = true)
