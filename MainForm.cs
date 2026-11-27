@@ -596,6 +596,9 @@ internal sealed class MainForm : Form
         advanced.Controls.Add(settingsTabs);
         settingsReady = true;
         advanced.Layout += (_, _) => SizeSettingsWindow();
+        advanced.VisibleChanged += (_, _) => SizeSettingsWindow();
+        settingsTabs.SelectedIndexChanged += (_, _) => SizeSettingsWindow();
+        advancedTabs.SelectedIndexChanged += (_, _) => SizeSettingsWindow();
         advanced.FontChanged += (_, _) => SizeSettingsWindow();
         advanced.DpiChanged += (_, _) => SizeSettingsWindow();
         settingsMonitor.TextChanged += (_, _) => SizeSettingsWindow();
@@ -613,27 +616,48 @@ internal sealed class MainForm : Form
         sizingSettings = true;
         try
         {
-            int width = (int)Math.Ceiling(650 * advanced.DeviceDpi / 96d);
+            var workingArea = Screen.FromControl(advanced).WorkingArea;
+            int frameWidth = advanced.Width - advanced.ClientSize.Width;
+            int frameHeight = advanced.Height - advanced.ClientSize.Height;
+            double scale = advanced.DeviceDpi / 96d;
+            int width = Math.Min((int)Math.Ceiling(650 * scale * advanced.Font.Size / 9),
+                workingArea.Width - frameWidth);
             if (advanced.ClientSize.Width != width)
                 advanced.ClientSize = new Size(width, advanced.ClientSize.Height);
             advanced.PerformLayout();
             int height = SettingsContentHeight(settingsTabs);
+            int availableHeight = workingArea.Height - frameHeight;
+            if (height > availableHeight)
+                height = SettingsContentHeight(settingsTabs, selectedOnly: true);
+            var page = settingsTabs.SelectedTab!;
+            if (page.Controls.OfType<TabControl>().FirstOrDefault() is { } nested)
+                page = nested.SelectedTab!;
+            page.AutoScroll = height > availableHeight;
+            if (!page.AutoScroll)
+                page.AutoScrollPosition = Point.Empty;
+            height = Math.Min(height, availableHeight);
             if (advanced.ClientSize.Height != height)
                 advanced.ClientSize = new Size(advanced.ClientSize.Width, height);
+            if (advanced.Visible)
+                advanced.Location = new Point(
+                    Math.Clamp(advanced.Left, workingArea.Left, Math.Max(workingArea.Left, workingArea.Right - advanced.Width)),
+                    Math.Clamp(advanced.Top, workingArea.Top, Math.Max(workingArea.Top, workingArea.Bottom - advanced.Height)));
         }
         finally { sizingSettings = false; }
     }
 
-    private static int SettingsContentHeight(TabControl tabs)
+    private static int SettingsContentHeight(TabControl tabs, bool selectedOnly = false)
     {
         tabs.PerformLayout();
         int height = 0;
         foreach (TabPage page in tabs.TabPages)
         {
+            if (selectedOnly && page != tabs.SelectedTab)
+                continue;
             page.PerformLayout();
             int contentHeight;
             if (page.Controls.OfType<TabControl>().FirstOrDefault() is { } nested)
-                contentHeight = SettingsContentHeight(nested);
+                contentHeight = SettingsContentHeight(nested, selectedOnly);
             else
             {
                 var panel = page.Controls.OfType<TableLayoutPanel>().Single();

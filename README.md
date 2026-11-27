@@ -37,7 +37,7 @@ Discovery refreshes automatically after input-switch attempts, display-topology 
 
 The main and settings windows have fixed borders: they cannot be manually resized or maximized. The app still uses per-monitor DPI scaling when moved between displays. The compact main window uses a 440-pixel logical minimum client width, smaller buttons, and content-sized height, with no empty status row when idle. Hover over any button for an explanation.
 
-Settings open centered over the main window and grow to fit every tab without scrolling or cutting off actions. Each settings button has a visible description beside it explaining what it changes and whether a separate Save is needed. Only the diagnostic log scrolls.
+Settings open centered over the main window and grow to fit every tab without scrolling or cutting off actions. The window width adapts to the font and DPI, up to the display's working width. If all tabs cannot fit on screen, the window sizes to the selected tab; scrolling is available only when that tab's content also exceeds the screen. Each settings button has a visible description beside it explaining what it changes and whether a separate Save is needed. The diagnostic log retains its own scrollbars.
 
 The input confirmation grows to fit its full warning and buttons at larger font sizes. The main window scrolls when its content cannot fit, and input buttons size to their text.
 
