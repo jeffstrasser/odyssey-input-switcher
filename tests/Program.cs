@@ -490,36 +490,88 @@ var layoutThread = new Thread(() =>
                 System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.Invoke(hidden, null);
             Check(hidden.Visible, "Showing Odyssey exits hidden-startup mode");
             hidden.Hide();
+            ((ToolStripMenuItem)hidden.MainMenuStrip!.Items[0]).DropDownItems
+                .OfType<ToolStripMenuItem>().Single(item => item.Text == "E&xit").PerformClick();
+            Check(hidden.IsDisposed, "Settings Exit stops the hidden app rather than hiding it again");
+        }
+        foreach (string pendingOperation in new[] { "busy", "confirming" })
+        {
+            using var waiting = new MainForm(startInTray: true);
+            _ = waiting.Handle;
+            var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+            var pending = typeof(MainForm).GetField(pendingOperation, flags)!;
+            pending.SetValue(waiting, true);
+            var exit = ((ToolStripMenuItem)waiting.MainMenuStrip!.Items[0]).DropDownItems
+                .OfType<ToolStripMenuItem>().Single(item => item.Text == "E&xit");
+            exit.PerformClick();
+            Check(!waiting.IsDisposed && (bool)typeof(MainForm).GetField("closeWhenIdle", flags)!.GetValue(waiting)!,
+                $"Settings Exit waits for an outstanding {pendingOperation} operation");
+            pending.SetValue(waiting, false);
+            exit.PerformClick();
+            Check(waiting.IsDisposed, $"Settings Exit completes once {pendingOperation} is cleared");
         }
         using var main = new MainForm();
         var menu = main.MainMenuStrip ?? throw new Exception("Standard menu bar is missing.");
         var settingsMenu = (ToolStripMenuItem)menu.Items[0];
-        string[] expectedMenu = ["Run at Windows startup", "Input & monitor settings...", "Customize input names...", "Visible inputs...",
-            "Save selected monitor as default", "Diagnostics & logging...", "Check for updates...", "About Odyssey..."];
+        string[] expectedMenu = ["&General...", "&Inputs...", "&Advanced...", "Check for updates...", "About Odyssey...", "E&xit"];
         Check(settingsMenu.Text == "&Settings" && settingsMenu.DropDownItems.OfType<ToolStripMenuItem>()
             .Select(item => item.Text).SequenceEqual(expectedMenu),
-            "Standard Settings menu exposes preferences, logging, updates and About with a keyboard mnemonic");
+            "Standard Settings menu exposes preferences, logging, updates, About and Exit with keyboard mnemonics");
         var mainLayout = main.Controls.OfType<TableLayoutPanel>().Single();
         var footer = (FlowLayoutPanel)mainLayout.GetControlFromPosition(0, 7)!;
         Check(footer.Controls.OfType<Button>().Select(button => button.Text).SequenceEqual(["Run in tray"]),
             "Footer retains Run in tray but no Settings button");
         var trayMenu = (ContextMenuStrip)typeof(MainForm).GetField("trayMenu",
             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(main)!;
-        var traySettings = trayMenu.Items.OfType<ToolStripMenuItem>().Single(item => item.Text == "Settings");
-        Check(traySettings.DropDownItems.OfType<ToolStripMenuItem>().Select(item => item.Text).SequenceEqual(expectedMenu),
-            "Tray Settings submenu preserves the same actions as the standard menu bar");
+        var trayMonitor = (ToolStripMenuItem)typeof(MainForm).GetField("trayMonitor",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(main)!;
+        var menuInputs = (ToolStripMenuItem[])typeof(MainForm).GetField("trayInputs",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(main)!;
+        var trayHiddenMessage = (ToolStripMenuItem)typeof(MainForm).GetField("trayAllInputsHidden",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(main)!;
+        Check(trayMenu.Items.Count == 6 && trayMenu.Items[0] == trayMonitor &&
+            trayMenu.Items[1] is ToolStripSeparator &&
+            trayMenu.Items.Cast<ToolStripItem>().Skip(2).SequenceEqual(
+                menuInputs.Cast<ToolStripItem>().Append(trayHiddenMessage)) &&
+            trayMenu.Items.OfType<ToolStripMenuItem>().All(item => !item.HasDropDownItems),
+            "Tray menu contains only the monitor heading, input choices and all-hidden guidance");
         Check(main.FormBorderStyle == FormBorderStyle.FixedSingle && !main.MaximizeBox,
             "Main window cannot be manually resized or maximized");
         var advanced = (Form)typeof(MainForm).GetField("advanced",
             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(main)!;
         Check(advanced.FormBorderStyle == FormBorderStyle.FixedSingle && !advanced.MaximizeBox,
             "Advanced window cannot be manually resized or maximized");
+        var settingsTabs = advanced.Controls.OfType<TabControl>().Single();
+        Check(settingsTabs.TabPages.Cast<TabPage>().Select(tab => tab.Text)
+            .SequenceEqual(["General", "Inputs", "Advanced"]),
+            "Settings separates everyday preferences, input presentation, and technical settings");
+        var generalPanel = settingsTabs.TabPages[0].Controls.OfType<TableLayoutPanel>().Single();
+        Check(generalPanel.Controls.OfType<CheckBox>().Select(control => control.Text)
+            .SequenceEqual(["Run at Windows startup", "Ask before switching inputs"]) &&
+            generalPanel.Controls.OfType<FlowLayoutPanel>().Single().Controls.OfType<Button>()
+                .Select(button => button.Text).SequenceEqual(["Save selected monitor as default", "Clear default monitor"]),
+            "General groups startup, confirmation, and both default-monitor actions");
+        var technicalTabs = settingsTabs.TabPages[2].Controls.OfType<TabControl>().Single();
+        Check(technicalTabs.TabPages.Cast<TabPage>().Select(tab => tab.Text)
+            .SequenceEqual(["Input values", "Diagnostics"]),
+            "Advanced keeps VCP editing separate from diagnostic reads");
         var nameFields = (TextBox[])typeof(MainForm).GetField("nameFields",
             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(main)!;
         var switches = (Button[])typeof(MainForm).GetField("switches",
             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(main)!;
         var inputValues = (TextBox[])typeof(MainForm).GetField("values",
             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(main)!;
+        string[] valuesBeforeNavigation = inputValues.Select(field => field.Text).ToArray();
+        for (int index = 0; index < 3; index++)
+        {
+            settingsMenu.DropDownItems[index].PerformClick();
+            Check(advanced.Visible && settingsTabs.SelectedIndex == index,
+                $"{settingsMenu.Text} shortcut opens the matching settings section {index}");
+            advanced.Hide();
+            main.Hide();
+        }
+        Check(inputValues.Select(field => field.Text).SequenceEqual(valuesBeforeNavigation),
+            "Opening settings from the main menu preserves staged VCP values");
         inputValues[1].Text = "0x1234";
         string[] originalValues = inputValues.Select(field => field.Text).ToArray();
         string namesDirectory = Path.Combine(AppContext.BaseDirectory, "names-test-" + Guid.NewGuid().ToString("N"));
@@ -550,7 +602,7 @@ var layoutThread = new Thread(() =>
                     "Restart restores custom names from disk");
             }
             var tabs = advanced.Controls.OfType<TabControl>().Single();
-            var namesLayout = (TableLayoutPanel)tabs.TabPages[2].Controls[0];
+            var namesLayout = (TableLayoutPanel)tabs.TabPages[1].Controls[0];
             var actions = (FlowLayoutPanel)namesLayout.GetControlFromPosition(0, 4)!;
             var restoreNames = actions.Controls.OfType<Button>().Single(button => button.Text == "Restore default names");
             typeof(Button).GetMethod("OnClick",
@@ -607,8 +659,8 @@ var layoutThread = new Thread(() =>
                         $"Visible buttons reflow without empty slots for mask {mask} at {size}pt");
                     Check(hiddenMessage.Visible == (count == 0) &&
                         trayMenu.Items.OfType<ToolStripMenuItem>().Single(item =>
-                            item.Text == "All inputs hidden - Settings > Visible inputs...").Available == (count == 0) &&
-                        (count != 0 || (hiddenMessage.Text.Contains("Settings > Visible inputs") &&
+                            item.Text == "All inputs hidden - Settings > Inputs...").Available == (count == 0) &&
+                        (count != 0 || (hiddenMessage.Text.Contains("Settings > Inputs") &&
                         hiddenMessage.Height >= hiddenMessage.GetPreferredSize(new System.Drawing.Size(hiddenMessage.Width, 0)).Height &&
                         hiddenMessage.Right <= inputPanel.ClientSize.Width)),
                         $"All-hidden state directs users to Settings without clipping at {size}pt");
@@ -671,15 +723,15 @@ var layoutThread = new Thread(() =>
                 $"Menu follows the main window font at {size}pt");
             advanced.Font = font;
             var namesTabs = advanced.Controls.OfType<TabControl>().Single();
-            namesTabs.SelectedIndex = 2;
+            namesTabs.SelectedIndex = 1;
             _ = advanced.Handle;
             _ = namesTabs.Handle;
-            _ = namesTabs.TabPages[2].Handle;
+            _ = namesTabs.TabPages[1].Handle;
             advanced.PerformAutoScale();
             advanced.PerformLayout();
             namesTabs.PerformLayout();
-            namesTabs.TabPages[2].PerformLayout();
-            var namesPanel = (TableLayoutPanel)namesTabs.TabPages[2].Controls[0];
+            namesTabs.TabPages[1].PerformLayout();
+            var namesPanel = (TableLayoutPanel)namesTabs.TabPages[1].Controls[0];
             namesPanel.PerformLayout();
             Check(nameFields.All(field => field.Width > 0 && field.Right <= namesPanel.ClientSize.Width) &&
                 visibilityFields.All(field => field.Right <= namesPanel.ClientSize.Width &&
@@ -687,6 +739,34 @@ var layoutThread = new Thread(() =>
                 namesPanel.Controls.OfType<Label>().All(label => label.Right <= namesPanel.ClientSize.Width),
                 $"Custom-name settings fit or scroll without clipping at {size}pt " +
                 $"(panel={namesPanel.ClientSize}, labels={string.Join("; ", namesPanel.Controls.OfType<Label>().Select(label => label.Bounds))})");
+            foreach (var page in new[] { settingsTabs.TabPages[0], settingsTabs.TabPages[1], technicalTabs.TabPages[0] })
+            {
+                settingsTabs.SelectedIndex = settingsTabs.TabPages.Contains(page)
+                    ? settingsTabs.TabPages.IndexOf(page) : 2;
+                technicalTabs.SelectedIndex = 0;
+                _ = page.Handle;
+                advanced.PerformLayout();
+                settingsTabs.PerformLayout();
+                technicalTabs.PerformLayout();
+                page.PerformLayout();
+                var panel = page.Controls.OfType<TableLayoutPanel>().Single();
+                panel.PerformLayout();
+                foreach (var flow in panel.Controls.OfType<FlowLayoutPanel>())
+                    flow.PerformLayout();
+                Check(panel.Controls.Cast<Control>().All(control =>
+                    control.Right <= panel.ClientSize.Width &&
+                    (control is not Label && control is not CheckBox ||
+                        control.Height >= control.GetPreferredSize(new System.Drawing.Size(control.Width, 0)).Height)) &&
+                    panel.Controls.OfType<FlowLayoutPanel>().SelectMany(flow => flow.Controls.Cast<Control>())
+                        .All(control => control.Right <= control.Parent!.ClientSize.Width &&
+                            control.Bottom <= control.Parent.ClientSize.Height &&
+                            control.Height >= control.GetPreferredSize(new System.Drawing.Size(control.Width, 0)).Height) &&
+                    (panel.Bottom <= page.ClientSize.Height || page.VerticalScroll.Visible),
+                    $"{page.Text} preferences and Save actions fit or scroll at {size}pt " +
+                    $"(page={page.ClientSize}, panel={panel.Bounds}, scroll={page.VerticalScroll.Visible}, " +
+                    $"controls={string.Join("; ", panel.Controls.Cast<Control>().Select(control => $"{control.Text}: {control.Bounds}, preferred={control.GetPreferredSize(new System.Drawing.Size(control.Width, 0))}"))}, " +
+                    $"buttons={string.Join("; ", panel.Controls.OfType<FlowLayoutPanel>().SelectMany(flow => flow.Controls.Cast<Control>()).Select(control => $"{control.Text}: {control.Bounds}, parent={control.Parent!.ClientSize}"))})");
+            }
             Check(main.Width >= main.MinimumSize.Width && main.ClientSize.Width >= 600 * main.DeviceDpi / 96d,
                 $"Content sizing preserves the designed minimum window width at {size}pt " +
                 $"(width={main.Width}, minimum={main.MinimumSize}, client={main.ClientSize}, DPI={main.DeviceDpi})");

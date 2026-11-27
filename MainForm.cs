@@ -16,12 +16,10 @@ internal sealed class MainForm : Form
         AccessibleName = "Monitor", DropDownWidth = 650
     };
     private readonly Button refresh = MakeButton("Refresh");
-    private readonly ToolStripMenuItem saveDefault = new("Save selected monitor as default");
-    private readonly ToolStripMenuItem traySaveDefault = new("Save selected monitor as default");
+    private readonly Button saveDefault = MakeButton("Save selected monitor as default");
     private readonly MenuStrip menuBar = new() { Dock = DockStyle.Top };
     private readonly ToolStripMenuItem settingsMenu = new("&Settings");
-    private readonly ToolStripMenuItem startupItem = new("Run at Windows startup");
-    private readonly ToolStripMenuItem trayStartupItem = new("Run at Windows startup");
+    private readonly CheckBox runAtStartup = new() { Text = "Run at Windows startup", AutoSize = true };
     private readonly ToolStripMenuItem settingsUpdate = new("Check for updates...");
     private readonly TabControl settingsTabs = new() { Dock = DockStyle.Fill, Padding = new Point(16, 8) };
     private readonly Button diagnostics = MakeButton("Read monitor diagnostics");
@@ -37,6 +35,7 @@ internal sealed class MainForm : Form
         AutoSize = true, Visible = false, ForeColor = Color.FromArgb(90, 103, 122)
     };
     private readonly Label defaultLabel = new() { AutoSize = true, ForeColor = Color.FromArgb(90, 103, 122) };
+    private readonly Label settingsMonitor = new() { AutoSize = true, Dock = DockStyle.Fill };
     private readonly Label diagnosticSummary = new() { AutoSize = true };
     private readonly TextBox log = new()
     {
@@ -51,19 +50,17 @@ internal sealed class MainForm : Form
     private readonly CheckBox[] visibilityFields = new CheckBox[3];
     private readonly Label allInputsHidden = new()
     {
-        Text = "All inputs are hidden. Open Settings > Visible inputs... to show them again.",
+        Text = "All inputs are hidden. Open Settings > Inputs... to show them again.",
         AutoSize = true, Dock = DockStyle.Fill, Visible = false
     };
     private readonly TextBox[] values = new TextBox[3];
     private readonly Button[] switches = new Button[3];
     private readonly ToolStripMenuItem[] trayInputs = new ToolStripMenuItem[3];
-    private readonly ToolStripMenuItem trayAllInputsHidden = new("All inputs hidden - Settings > Visible inputs...")
+    private readonly ToolStripMenuItem trayAllInputsHidden = new("All inputs hidden - Settings > Inputs...")
     {
         Enabled = false, Visible = false
     };
     private readonly ToolStripMenuItem trayMonitor = new("Discovering monitors...") { Enabled = false };
-    private readonly ToolStripMenuItem trayRefresh = new("Refresh monitors");
-    private readonly ToolStripMenuItem trayUpdate = new("Check for updates...");
     private readonly CancellationTokenSource updateCancellation = new();
     private readonly NotifyIcon tray = new();
     private readonly ContextMenuStrip trayMenu = new();
@@ -135,11 +132,26 @@ internal sealed class MainForm : Form
         };
         refresh.Click += (_, _) => QueueRefresh("Manual refresh");
         saveDefault.Click += (_, _) => SaveDefault();
-        traySaveDefault.Click += (_, _) => SaveDefault();
         clearDefault.Click += (_, _) => SaveDefault(clear: true);
         diagnostics.Click += async (_, _) => await DiagnosticsAsync();
         save.Click += (_, _) => SaveSettings();
         confirmSwitch.CheckedChanged += (_, _) => SaveConfirmationPreference();
+        runAtStartup.Click += (_, _) =>
+        {
+            try
+            {
+                StartupRegistration.SetEnabled(runAtStartup.Checked);
+                RefreshStartupSetting();
+                Append(runAtStartup.Checked ? "Enabled Windows startup in the system tray."
+                    : "Disabled Windows startup.");
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or
+                System.Security.SecurityException or InvalidOperationException)
+            {
+                runAtStartup.Checked = !runAtStartup.Checked;
+                ReportSettingsFailure(error);
+            }
+        };
         restore.Click += (_, _) =>
         {
             ApplySettings(InputSettings.Resolve(null));
@@ -171,7 +183,7 @@ internal sealed class MainForm : Form
                 {
                     explainedTray = true;
                     tray.ShowBalloonTip(4000, "Odyssey is still running",
-                        "Right-click the monitor icon to switch inputs or exit.", ToolTipIcon.Info);
+                        "Right-click the monitor icon to switch inputs. Double-click it for Settings > Exit.", ToolTipIcon.Info);
                 }
 
             }
@@ -194,6 +206,17 @@ internal sealed class MainForm : Form
         FlatAppearance = { BorderSize = 0, MouseOverBackColor = primary
             ? Color.FromArgb(24, 72, 184) : Color.FromArgb(230, 236, 247) }
     };
+
+    private static FlowLayoutPanel MakeSettingsActions()
+    {
+        var panel = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top };
+        panel.SizeChanged += (_, _) =>
+        {
+            foreach (var button in panel.Controls.OfType<Button>())
+                button.MaximumSize = new Size(Math.Max(1, panel.ClientSize.Width - button.Margin.Horizontal), 0);
+        };
+        return panel;
+    }
 
     protected override void OnLoad(EventArgs e)
     {
@@ -361,7 +384,7 @@ internal sealed class MainForm : Form
 
     private void BuildAdvancedWindow()
     {
-        advanced.Text = "Odyssey - Settings & diagnostics";
+        advanced.Text = "Odyssey - Settings";
         advanced.Font = Font;
         advanced.BackColor = Canvas;
         advanced.ForeColor = Ink;
@@ -383,7 +406,7 @@ internal sealed class MainForm : Form
         {
             BackColor = Canvas, Padding = new Padding(16), AutoScroll = true
         };
-        var settingsTab = new TabPage("Inputs & default monitor")
+        var settingsTab = new TabPage("Input values")
         {
             BackColor = Canvas, Padding = new Padding(16), AutoScroll = true
         };
@@ -400,7 +423,7 @@ internal sealed class MainForm : Form
 
         var settingsLayout = new TableLayoutPanel
         {
-            Dock = DockStyle.Top, AutoSize = true, ColumnCount = 2, RowCount = 7
+            Dock = DockStyle.Top, AutoSize = true, ColumnCount = 2, RowCount = 5
         };
         settingsLayout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         settingsLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
@@ -409,7 +432,7 @@ internal sealed class MainForm : Form
             Text = "VCP 0x60 input values (decimal or 0x hex).\r\n" +
                 "Working Odyssey profile: DisplayPort 0x0F, HDMI 0x05, Micro HDMI 0x06.\r\n" +
                 "Changing these settings does not send monitor commands.",
-            AutoSize = true, Margin = new Padding(3, 0, 3, 20)
+            AutoSize = true, Dock = DockStyle.Fill, Margin = new Padding(3, 0, 3, 20)
         };
         settingsLayout.Controls.Add(explanation, 0, 0);
         settingsLayout.SetColumnSpan(explanation, 2);
@@ -423,19 +446,40 @@ internal sealed class MainForm : Form
             }, 0, i + 1);
             settingsLayout.Controls.Add(values[i], 1, i + 1);
         }
-        var actions = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top };
+        var actions = MakeSettingsActions();
         actions.Controls.Add(restore);
         actions.Controls.Add(save);
         settingsLayout.Controls.Add(actions, 0, 4);
         settingsLayout.SetColumnSpan(actions, 2);
-        settingsLayout.Controls.Add(confirmSwitch, 0, 5);
-        settingsLayout.SetColumnSpan(confirmSwitch, 2);
-        settingsLayout.Controls.Add(clearDefault, 0, 6);
-        settingsLayout.SetColumnSpan(clearDefault, 2);
         settingsTab.Controls.Add(settingsLayout);
-        settingsTabs.TabPages.Add(diagnosticTab);
-        settingsTabs.TabPages.Add(settingsTab);
-        var namesTab = new TabPage("Input names & visibility")
+
+        var generalTab = new TabPage("General")
+        {
+            BackColor = Canvas, Padding = new Padding(16), AutoScroll = true
+        };
+        var generalLayout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, RowCount = 5
+        };
+        generalLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        generalLayout.Controls.Add(new Label
+        {
+            Text = "Startup and confirmation changes are saved immediately.\r\n" +
+                "Choose a monitor in the main window before saving it as your default.",
+            AutoSize = true, Dock = DockStyle.Fill, Margin = new Padding(3, 0, 3, 20)
+        }, 0, 0);
+        generalLayout.Controls.Add(runAtStartup, 0, 1);
+        generalLayout.Controls.Add(confirmSwitch, 0, 2);
+        settingsMonitor.Margin = new Padding(3, 16, 3, 12);
+        generalLayout.Controls.Add(settingsMonitor, 0, 3);
+        var monitorActions = MakeSettingsActions();
+        monitorActions.Controls.Add(saveDefault);
+        monitorActions.Controls.Add(clearDefault);
+        generalLayout.Controls.Add(monitorActions, 0, 4);
+        generalTab.Controls.Add(generalLayout);
+        settingsTabs.TabPages.Add(generalTab);
+
+        var namesTab = new TabPage("Inputs")
         {
             BackColor = Canvas, Padding = new Padding(16), AutoScroll = true
         };
@@ -475,7 +519,7 @@ internal sealed class MainForm : Form
             };
             namesLayout.Controls.Add(visibilityFields[i], 2, i + 1);
         }
-        var nameActions = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top };
+        var nameActions = MakeSettingsActions();
         var restoreNames = MakeButton("Restore default names");
         restoreNames.Click += (_, _) =>
         {
@@ -493,8 +537,14 @@ internal sealed class MainForm : Form
         namesLayout.SetColumnSpan(nameActions, 3);
         namesTab.Controls.Add(namesLayout);
         settingsTabs.TabPages.Add(namesTab);
+        var advancedTab = new TabPage("Advanced") { BackColor = Canvas };
+        var advancedTabs = new TabControl { Dock = DockStyle.Fill, Padding = new Point(16, 8) };
+        advancedTabs.TabPages.Add(settingsTab);
+        advancedTabs.TabPages.Add(diagnosticTab);
+        advancedTab.Controls.Add(advancedTabs);
+        settingsTabs.TabPages.Add(advancedTab);
         advanced.Controls.Add(settingsTabs);
-        PopulateSettingsMenu(settingsMenu.DropDownItems, startupItem, settingsUpdate, saveDefault);
+        PopulateSettingsMenu(settingsMenu.DropDownItems, settingsUpdate);
         settingsMenu.DropDownOpening += (_, _) => { RefreshStartupSetting(); UpdateControls(); };
     }
 
@@ -510,15 +560,6 @@ internal sealed class MainForm : Form
             trayMenu.Items.Add(trayInputs[i]);
         }
         trayMenu.Items.Add(trayAllInputsHidden);
-        trayMenu.Items.Add(new ToolStripSeparator());
-        trayMenu.Items.Add("Show Odyssey", null, (_, _) => ShowMainWindow());
-        trayRefresh.Click += (_, _) => QueueRefresh("Tray refresh");
-        trayMenu.Items.Add(trayRefresh);
-        var traySettings = new ToolStripMenuItem("Settings");
-        PopulateSettingsMenu(traySettings.DropDownItems, trayStartupItem, trayUpdate, traySaveDefault);
-        traySettings.DropDownOpening += (_, _) => { RefreshStartupSetting(); UpdateControls(); };
-        trayMenu.Items.Add(traySettings);
-        trayMenu.Items.Add("Exit", null, (_, _) => ExitApplication());
         trayMenu.Opening += (_, _) => UpdateControls();
         tray.Icon = Icon;
         tray.Text = "Odyssey Input Switcher";
@@ -538,40 +579,24 @@ internal sealed class MainForm : Form
     private void ShowAdvanced(int tab = 0)
     {
         ShowMainWindow();
+        RefreshStartupSetting();
+        UpdateControls();
         settingsTabs.SelectedIndex = tab;
         advanced.Show(this);
         advanced.Activate();
     }
 
-    private void PopulateSettingsMenu(ToolStripItemCollection items,
-        ToolStripMenuItem startup, ToolStripMenuItem update, ToolStripMenuItem defaultMonitor)
+    private void PopulateSettingsMenu(ToolStripItemCollection items, ToolStripMenuItem update)
     {
-        startup.Click += (_, _) =>
-        {
-            try
-            {
-                StartupRegistration.SetEnabled(!startup.Checked);
-                RefreshStartupSetting();
-                Append(startup.Checked ? "Enabled Windows startup in the system tray."
-                    : "Disabled Windows startup.");
-            }
-            catch (Exception error) when (error is IOException or UnauthorizedAccessException or
-                System.Security.SecurityException or InvalidOperationException)
-            {
-                ReportSettingsFailure(error);
-            }
-        };
-        items.Add(startup);
-        items.Add(new ToolStripSeparator());
-        items.Add("Input & monitor settings...", null, (_, _) => ShowAdvanced(1));
-        items.Add("Customize input names...", null, (_, _) => ShowAdvanced(2));
-        items.Add("Visible inputs...", null, (_, _) => ShowAdvanced(2));
-        items.Add(defaultMonitor);
-        items.Add("Diagnostics & logging...", null, (_, _) => ShowAdvanced(0));
+        items.Add("&General...", null, (_, _) => ShowAdvanced(0));
+        items.Add("&Inputs...", null, (_, _) => ShowAdvanced(1));
+        items.Add("&Advanced...", null, (_, _) => ShowAdvanced(2));
         items.Add(new ToolStripSeparator());
         update.Click += async (_, _) => await CheckForUpdatesAsync(manual: true);
         items.Add(update);
         items.Add("About Odyssey...", null, (_, _) => ShowAbout());
+        items.Add(new ToolStripSeparator());
+        items.Add("E&xit", null, (_, _) => ExitApplication());
     }
 
     private void ShowAbout()
@@ -591,7 +616,7 @@ internal sealed class MainForm : Form
     {
         try
         {
-            startupItem.Checked = trayStartupItem.Checked = StartupRegistration.IsEnabled();
+            runAtStartup.Checked = StartupRegistration.IsEnabled();
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or
             System.Security.SecurityException or InvalidOperationException)
@@ -629,21 +654,20 @@ internal sealed class MainForm : Form
         bool selected = !busy && !confirming && !exiting && monitor is not null;
         monitors.Enabled = !busy && !stale;
         refresh.Enabled = !busy && !exiting;
-        trayRefresh.Enabled = refresh.Enabled;
-        trayUpdate.Enabled = !busy && !confirming && !exiting && !checkingForUpdates;
-        settingsUpdate.Enabled = trayUpdate.Enabled;
-        startupItem.Enabled = trayStartupItem.Enabled = !busy && !exiting;
+        settingsUpdate.Enabled = !busy && !confirming && !exiting && !checkingForUpdates;
+        runAtStartup.Enabled = !busy && !exiting;
         diagnostics.Enabled = selected;
         save.Enabled = restore.Enabled = !busy && !exiting;
         confirmSwitch.Enabled = !busy && !exiting;
         clearDefault.Enabled = !busy && preferences.DefaultMonitorId is not null;
-        saveDefault.Visible = traySaveDefault.Visible = monitors.Items.Count > 1;
-        saveDefault.Enabled = traySaveDefault.Enabled = selected && monitor?.StableId is not null &&
+        saveDefault.Enabled = selected && monitor?.StableId is not null &&
             MonitorSelection.FindUnique(CurrentIdentities(), monitor.StableId) == monitors.SelectedIndex;
         defaultLabel.Text = monitor is null ? "" : monitors.Items.Count == 1 ? "Selected automatically"
             : monitor.StableId is null ? "Select manually after display changes."
             : MonitorSelection.FindUnique(CurrentIdentities(), preferences.DefaultMonitorId) == monitors.SelectedIndex
-                ? "Your default monitor" : "Save this monitor as your default.";
+                ? "Your default monitor" : "Save this monitor as your default in Settings > General.";
+        settingsMonitor.Text = $"Selected: {monitor?.DisplayName ?? "none"}\r\n" +
+            $"Saved default: {preferences.DefaultMonitorId ?? "none"}";
         trayMonitor.Text = monitor is null ? "No monitor selected" : monitor.DisplayName;
         string trayText = monitor is null ? "Odyssey - no monitor selected" : "Odyssey - " + monitor.DisplayName;
         tray.Text = trayText[..Math.Min(63, trayText.Length)];
@@ -765,7 +789,7 @@ internal sealed class MainForm : Form
                     "Odyssey update available", MessageBoxButtons.YesNo, MessageBoxIcon.Question,
                     MessageBoxDefaultButton.Button2) != DialogResult.Yes || exiting)
                 {
-                    SetStatus("Update declined. Use the tray menu to check again.");
+                    SetStatus("Update declined. Use Settings > Check for updates... to check again.");
                     return;
                 }
                 approved = true;
@@ -824,12 +848,12 @@ internal sealed class MainForm : Form
 
     private void ReportFailure(Exception error, bool showDialog = true)
     {
-        SetStatus("Operation failed. Open Settings > Diagnostics & logging for details.");
+        SetStatus("Operation failed. Open Settings > Advanced > Diagnostics for details.");
         Append(error.ToString());
         tray.ShowBalloonTip(5000, "Odyssey operation failed", error.Message, ToolTipIcon.Error);
         if (showDialog)
             MessageBox.Show(advanced.Visible ? advanced : Visible ? this : null, error.Message +
-                "\r\n\r\nSee Settings > Diagnostics & logging for details. The DDC/CI connection may be unavailable.",
+                "\r\n\r\nSee Settings > Advanced > Diagnostics for details. The DDC/CI connection may be unavailable.",
                 "Odyssey Input Switcher", MessageBoxButtons.OK, MessageBoxIcon.Error);
     }
 
@@ -948,7 +972,7 @@ internal sealed class MainForm : Form
             foreach (string line in result.lines)
                 Append(line);
             SetStatus(stale ? "Monitor connection changed. Refreshing..."
-                : result.failed ? "Some reads failed. See Settings > Diagnostics & logging for details."
+                : result.failed ? "Some reads failed. See Settings > Advanced > Diagnostics for details."
                 : "Diagnostics complete. No input commands sent.");
         });
     }
