@@ -1,7 +1,7 @@
 param(
     [ValidateSet('win-x64', 'win-arm64', 'all')]
     [string]$Architecture = 'all',
-    [ValidatePattern('^\d+\.\d+\.\d+$')]
+    [ValidatePattern('^([1-9]\d*|\d+\.\d+\.\d+)$')]
     [string]$Version,
     [switch]$SkipInstaller,
     [string]$InnoCompiler
@@ -12,7 +12,11 @@ if (!$Version) {
     [xml]$project = Get-Content -LiteralPath 'OdysseyInputSwitcher.csproj'
     $Version = [string]$project.Project.PropertyGroup.Version
 }
-if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw 'Version must be MAJOR.MINOR.PATCH.' }
+if ($Version -notmatch '^([1-9]\d*|\d+\.\d+\.\d+)$') { throw 'Version must be a positive whole number or a legacy MAJOR.MINOR.PATCH.' }
+$binaryVersion = $Version
+if ($Version -match '^\d+$') { $binaryVersion = "$Version.0.0" }
+if (@(([version]$binaryVersion).Major, ([version]$binaryVersion).Minor, ([version]$binaryVersion).Build) |
+    Where-Object { $_ -gt 65535 }) { throw 'Version exceeds the Windows version limit.' }
 if (!$SkipInstaller -and $Architecture -ne 'all') {
     throw 'The universal installer requires both architectures. Use -Architecture all or explicitly -SkipInstaller.'
 }
@@ -63,7 +67,7 @@ foreach ($target in $targets) {
 if (!$SkipInstaller) {
     $setup = "dist\OdysseyInputSwitcher-Setup-$Version.exe"
     if (Test-Path -LiteralPath $setup) { Remove-Item -LiteralPath $setup }
-    & $InnoCompiler /Qp "/DAppVersion=$Version" 'installer\OdysseyInputSwitcher.iss'
+    & $InnoCompiler /Qp "/DAppVersion=$Version" "/DAppFileVersion=$binaryVersion.0" 'installer\OdysseyInputSwitcher.iss'
     if ($LASTEXITCODE -ne 0 -or !(Test-Path -LiteralPath $setup)) {
         throw 'Universal installer compilation failed.'
     }

@@ -61,10 +61,7 @@ internal sealed class ReleaseUpdater : IDisposable
         if (release.GetProperty("draft").GetBoolean() || release.GetProperty("prerelease").GetBoolean())
             return null;
         string tag = release.GetProperty("tag_name").GetString() ?? "";
-        if (!Regex.IsMatch(tag, @"^v?\d+\.\d+\.\d+(\.\d+)?$") ||
-            !Version.TryParse(tag.TrimStart('v'), out var version))
-            throw new InvalidDataException("The latest release has an unsupported version tag.");
-        version = NormalizeVersion(version);
+        var version = ParseVersion(tag);
         if (version <= NormalizeVersion(currentVersion))
             return null;
         string runtime = architecture switch
@@ -92,6 +89,26 @@ internal sealed class ReleaseUpdater : IDisposable
 
     private static Version NormalizeVersion(Version version) =>
         new(version.Major, version.Minor, Math.Max(0, version.Build), Math.Max(0, version.Revision));
+
+    internal static Version ParseVersion(string value)
+    {
+        if (!Regex.IsMatch(value, @"^v?([1-9]\d*|\d+\.\d+\.\d+(\.\d+)?)$"))
+            throw new InvalidDataException("The release has an unsupported version tag.");
+        string number = value.TrimStart('v');
+        if (!number.Contains('.'))
+            number += ".0.0";
+        if (!Version.TryParse(number, out var version))
+            throw new InvalidDataException("The release has an unsupported version tag.");
+        return NormalizeVersion(version);
+    }
+
+    internal static string FormatVersion(Version version)
+    {
+        version = NormalizeVersion(version);
+        return version.Minor == 0 && version.Build == 0 && version.Revision == 0
+            ? version.Major.ToString()
+            : version.ToString(version.Revision == 0 ? 3 : 4);
+    }
 
     internal async Task<string> StageAsync(ReleaseUpdate update, CancellationToken cancellationToken)
     {

@@ -27,7 +27,7 @@ if (args.Length == 4 && args[0] == "--verify-package")
                 throw new InvalidDataException("The release ZIP must contain exactly the app executable and README at its root.");
         string executable = Path.Combine(staged, "payload.exe");
         ReleaseUpdater.ExtractExecutable(args[1], executable);
-        ReleaseUpdater.ValidateExecutable(executable, Version.Parse(args[3]), Enum.Parse<Architecture>(args[2]));
+        ReleaseUpdater.ValidateExecutable(executable, ReleaseUpdater.ParseVersion(args[3]), Enum.Parse<Architecture>(args[2]));
         Console.WriteLine($"PASS: {args[2]} release ZIP shape, executable headers, architecture, and version {args[3]}.");
     }
     finally { Directory.Delete(staged, recursive: true); }
@@ -201,6 +201,21 @@ string ReleaseJson(string tag = "v1.3.0", bool prerelease = false, bool draft = 
 var current = new Version(1, 2, 0, 0);
 Check(ReleaseUpdater.ParseRelease(ReleaseJson(), current, Architecture.X64)?.Version == new Version(1, 3, 0, 0),
     "Offer a newer stable release with normalized version components");
+Check(ReleaseUpdater.ParseRelease(ReleaseJson("v2"), new Version(1, 4, 1), Architecture.X64)?.Version ==
+    new Version(2, 0, 0, 0), "Offer the first whole-number release after a legacy release");
+Check(ReleaseUpdater.ParseRelease(ReleaseJson("v3", runtime: "win-arm64"), new Version(2, 0, 0, 0),
+    Architecture.Arm64)?.Version == new Version(3, 0, 0, 0), "Offer subsequent whole-number ARM64 releases");
+foreach (string tag in new[] { "v2", "2", "v1", "v1.4.1" })
+    Check(ReleaseUpdater.ParseRelease(ReleaseJson(tag), new Version(2, 0, 0, 0), Architecture.X64) is null,
+        "Do not offer current or older releases after migration: " + tag);
+foreach (string tag in new[] { "v0", "v02", "v2.1", "v-2", "v2-beta", "v2147483648" })
+    Reject<InvalidDataException>(() => ReleaseUpdater.ParseVersion(tag), "Reject malformed whole-number version " + tag);
+Check(ReleaseUpdater.FormatVersion(new Version(2, 0, 0, 0)) == "2" &&
+    ReleaseUpdater.FormatVersion(ReleaseUpdater.ParseVersion("v3")) == "3",
+    "Display whole-number versions without binary-version padding");
+Check(ReleaseUpdater.FormatVersion(new Version(1, 4, 1, 0)) == "1.4.1" &&
+    ReleaseUpdater.FormatVersion(new Version(1, 4, 1, 2)) == "1.4.1.2",
+    "Preserve legacy version components for display");
 Check(ReleaseUpdater.ParseRelease(ReleaseJson(runtime: "win-arm64"), current, Architecture.Arm64)!
     .DownloadUrl.AbsolutePath.EndsWith("OdysseyInputSwitcher-win-arm64.zip"), "Select native ARM64 asset");
 foreach (string tag in new[] { "v1.2.0", "1.2.0.0", "v1.1.0" })

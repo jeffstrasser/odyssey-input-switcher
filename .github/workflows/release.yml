@@ -9,11 +9,57 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && github.ref || 'release' }}
+  cancel-in-progress: false
+
 jobs:
+  version:
+    runs-on: windows-2022
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      previous: ${{ steps.version.outputs.previous }}
+      sha: ${{ steps.version.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.ref_type == 'branch' && github.event.repository.default_branch || github.sha }}
+      - name: Resolve next release version
+        id: version
+        shell: pwsh
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          [xml]$project = Get-Content OdysseyInputSwitcher.csproj
+          $previous = [string]$project.Project.PropertyGroup.Version
+          $version = $previous
+          if ($env:REF_TYPE -eq 'tag') {
+            if ($env:REF_NAME -notmatch '^v([1-9]\d*|\d+\.\d+\.\d+)$') { throw 'Release tag must be vNUMBER (or a legacy vMAJOR.MINOR.PATCH).' }
+            if ($version -ne $Matches[1]) { throw 'Release tag must match the project version.' }
+          } elseif ($env:EVENT_NAME -eq 'workflow_dispatch') {
+            if ($env:REF_NAME -ne $env:DEFAULT_BRANCH) { throw 'Start a new release from the default branch only.' }
+            if ($previous -notmatch '^([1-9]\d*)(?:\.\d+\.\d+)?$') { throw 'Unsupported project version.' }
+            $next = [long]$Matches[1] + 1
+            if ($next -gt 65535) { throw 'Release version exceeds the Windows version limit.' }
+            $version = [string]$next
+          }
+          $sha = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'Could not resolve the source revision.' }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "previous=$previous" >> $env:GITHUB_OUTPUT
+          "sha=$sha" >> $env:GITHUB_OUTPUT
+
   build:
+    needs: version
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.sha }}
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
@@ -27,25 +73,10 @@ jobs:
           if ($actual -ne '9C73C3BAE7ED48D44112A0F48E66742C00090BDB5BEF71D9D3C056C66E97B732') { throw 'Inno Setup download hash mismatch.' }
           $process = Start-Process $setup -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /ALLUSERS' -Wait -PassThru
           if ($process.ExitCode -ne 0) { throw "Inno Setup installation failed: $($process.ExitCode)" }
-      - name: Resolve release version
-        id: version
-        shell: pwsh
-        env:
-          REF_TYPE: ${{ github.ref_type }}
-          REF_NAME: ${{ github.ref_name }}
-        run: |
-          [xml]$project = Get-Content OdysseyInputSwitcher.csproj
-          $version = [string]$project.Project.PropertyGroup.Version
-          if ($env:REF_TYPE -eq 'tag') {
-            if ($env:REF_NAME -notmatch '^v(\d+\.\d+\.\d+)$') { throw 'Release tag must be vMAJOR.MINOR.PATCH.' }
-            if ($version -ne $Matches[1]) { throw 'Release tag must match the project version.' }
-            $version = $Matches[1]
-          }
-          "version=$version" >> $env:GITHUB_OUTPUT
       - name: Build and verify all packages
         shell: pwsh
         env:
-          APP_VERSION: ${{ steps.version.outputs.version }}
+          APP_VERSION: ${{ needs.version.outputs.version }}
         run: .\build.ps1 -Version $env:APP_VERSION
       - uses: actions/upload-artifact@v4
         with:
@@ -57,7 +88,7 @@ jobs:
           if-no-files-found: error
 
   installer-test:
-    needs: build
+    needs: [version, build]
     strategy:
       fail-fast: false
       matrix:
@@ -69,6 +100,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.sha }}
       - uses: actions/download-artifact@v4
         with:
           name: release-packages
@@ -84,12 +117,15 @@ jobs:
           .\tests\InstallerSmoke.ps1 -Installer $installer[0].FullName -Architecture $env:APP_ARCHITECTURE
 
   publish:
-    if: github.ref_type == 'tag'
-    needs: [build, installer-test]
+    if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
+    needs: [version, build, installer-test]
     runs-on: windows-2022
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.sha }}
       - uses: actions/download-artifact@v4
         with:
           name: release-packages
@@ -99,8 +135,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: v${{ needs.version.outputs.version }}
+          APP_VERSION: ${{ needs.version.outputs.version }}
+          PREVIOUS_VERSION: ${{ needs.version.outputs.previous }}
+          REF_TYPE: ${{ github.ref_type }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
+          $ErrorActionPreference = 'Stop'
           $manifest = @(Get-ChildItem packages -Filter 'SHA256SUMS-*.txt')
           if ($manifest.Count -ne 1) { throw 'Expected one checksum manifest.' }
           foreach ($line in Get-Content -LiteralPath $manifest[0].FullName) {
@@ -110,6 +151,28 @@ jobs:
             if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected) {
               throw "Artifact checksum mismatch: $path"
             }
+          }
+          if ($env:REF_TYPE -ne 'tag') {
+            $projectPath = 'OdysseyInputSwitcher.csproj'
+            $content = Get-Content -LiteralPath $projectPath -Raw
+            $old = "<Version>$env:PREVIOUS_VERSION</Version>"
+            if ([regex]::Matches($content, [regex]::Escape($old)).Count -ne 1) {
+              throw 'Expected exactly one matching project version.'
+            }
+            [IO.File]::WriteAllText((Join-Path $PWD $projectPath),
+              $content.Replace($old, "<Version>$env:APP_VERSION</Version>"))
+            git config user.name 'github-actions[bot]'
+            if ($LASTEXITCODE -ne 0) { throw 'Git identity configuration failed.' }
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            if ($LASTEXITCODE -ne 0) { throw 'Git identity configuration failed.' }
+            git add -- $projectPath
+            if ($LASTEXITCODE -ne 0) { throw 'Version staging failed.' }
+            git commit -m "Release $env:RELEASE_TAG" -m 'Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>'
+            if ($LASTEXITCODE -ne 0) { throw 'Version commit failed.' }
+            git tag $env:RELEASE_TAG
+            if ($LASTEXITCODE -ne 0) { throw 'Release tag creation failed.' }
+            git push --atomic origin "HEAD:refs/heads/$env:DEFAULT_BRANCH" "refs/tags/$env:RELEASE_TAG"
+            if ($LASTEXITCODE -ne 0) { throw 'Version/tag push failed. Check branch permissions, an existing tag, or newer branch changes.' }
           }
           $files = @(Get-ChildItem packages -File | ForEach-Object FullName)
           gh release create $env:RELEASE_TAG @files --verify-tag --title $env:RELEASE_TAG --generate-notes

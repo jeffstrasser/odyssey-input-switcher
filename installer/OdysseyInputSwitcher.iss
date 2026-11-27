@@ -1,6 +1,9 @@
 #ifndef AppVersion
   #error AppVersion must be supplied by build.ps1.
 #endif
+#ifndef AppFileVersion
+  #error AppFileVersion must be supplied by build.ps1.
+#endif
 #if Ver != EncodeVer(6, 7, 3)
   #error Use Inno Setup 6.7.3 to match the release build compiler.
 #endif
@@ -31,7 +34,7 @@ WizardStyle=modern
 CloseApplications=no
 RestartApplications=no
 SetupLogging=yes
-VersionInfoVersion={#AppVersion}
+VersionInfoVersion={#AppFileVersion}
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked

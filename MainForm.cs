@@ -732,7 +732,7 @@ internal sealed class MainForm : Form
         ShowMainWindow();
         MessageBox.Show(this,
             "Odyssey Input Switcher\r\n" +
-            $"Version: {ReleaseUpdater.CurrentVersion.ToString(3)}\r\n" +
+            $"Version: {ReleaseUpdater.FormatVersion(ReleaseUpdater.CurrentVersion)}\r\n" +
             "Creator: Jeffrey Strasser (jeffstrasser)\r\n" +
             $"Architecture: {RuntimeInformation.ProcessArchitecture}\r\n\r\n" +
             "Switch monitor inputs using Windows DDC/CI.\r\n\r\n" +
@@ -834,7 +834,7 @@ internal sealed class MainForm : Form
                 if (update is not null)
                     NotifyUpdateAvailable(update);
                 else
-                    Append($"No newer stable release. Installed version: {ReleaseUpdater.CurrentVersion}.");
+                    Append($"No newer stable release. Installed version: {ReleaseUpdater.FormatVersion(ReleaseUpdater.CurrentVersion)}.");
             }
         }
         catch (OperationCanceledException) when (updateCancellation.IsCancellationRequested)
@@ -861,9 +861,9 @@ internal sealed class MainForm : Form
 
     private void NotifyUpdateAvailable(ReleaseUpdate update)
     {
-        Append($"Version {update.Version} is available. Open Settings > Check for updates to upgrade.");
+        Append($"Version {ReleaseUpdater.FormatVersion(update.Version)} is available. Open Settings > Check for updates to upgrade.");
         tray.ShowBalloonTip(5000, "Odyssey update available",
-            $"Version {update.Version} is available. Open Settings > Check for updates.", ToolTipIcon.Info);
+            $"Version {ReleaseUpdater.FormatVersion(update.Version)} is available. Open Settings > Check for updates.", ToolTipIcon.Info);
     }
 
     internal async Task CheckForUpdatesAsync(bool manual)
@@ -898,7 +898,7 @@ internal sealed class MainForm : Form
                     return;
                 if (update is null)
                 {
-                    Append($"No newer stable release. Installed version: {ReleaseUpdater.CurrentVersion}.");
+                    Append($"No newer stable release. Installed version: {ReleaseUpdater.FormatVersion(ReleaseUpdater.CurrentVersion)}.");
                     SetStatus("No newer stable release is available.");
                     if (manual)
                         MessageBox.Show(this, "No newer stable release is available.",
@@ -912,7 +912,7 @@ internal sealed class MainForm : Form
                 }
                 ShowMainWindow();
                 if (MessageBox.Show(this,
-                    $"Version {update.Version} is available (installed: {ReleaseUpdater.CurrentVersion}).\r\n\r\n" +
+                    $"Version {ReleaseUpdater.FormatVersion(update.Version)} is available (installed: {ReleaseUpdater.FormatVersion(ReleaseUpdater.CurrentVersion)}).\r\n\r\n" +
                     "Download and install it now? Odyssey will close and restart. Your settings will be kept.",
                     "Odyssey update available", MessageBoxButtons.YesNo, MessageBoxIcon.Question,
                     MessageBoxDefaultButton.Button2) != DialogResult.Yes || exiting)
@@ -930,7 +930,7 @@ internal sealed class MainForm : Form
                     return;
                 ReleaseUpdater.StartInstaller(stagedDirectory);
                 installerStarted = true;
-                Append($"Installing version {update.Version}; restarting Odyssey.");
+                Append($"Installing version {ReleaseUpdater.FormatVersion(update.Version)}; restarting Odyssey.");
                 ExitApplication();
             }
             catch (OperationCanceledException) when (updateCancellation.IsCancellationRequested)
