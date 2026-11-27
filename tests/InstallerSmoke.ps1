@@ -41,8 +41,8 @@ foreach ($name in @('inputs.json', 'preferences.json', 'input-names.json', 'inpu
 }
 $installed = $false
 try {
-    $group = 'Odyssey test ' + [IO.Path]::GetFileName($directory)
-    $arguments = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /NOCANCEL /TASKS=`"`" /GROUP=`"$group`" /DIR=`"$app`" /LOG=`"$directory\install.log`""
+    $group = 'Connected Display Input Selector'
+    $arguments = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /NOCANCEL /TASKS=`"`" /DIR=`"$app`" /LOG=`"$directory\install.log`""
     $process = Start-Process -FilePath $installerPath -ArgumentList $arguments -PassThru
     if (!$process.WaitForExit(120000)) { Stop-Process -Id $process.Id; throw 'Installer timed out.' }
     if ($process.ExitCode -ne 0) { throw "Installer failed: $($process.ExitCode). See $directory\install.log" }
