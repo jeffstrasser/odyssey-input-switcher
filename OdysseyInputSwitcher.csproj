@@ -10,6 +10,9 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyName>OdysseyInputSwitcher</AssemblyName>
     <RootNamespace>OdysseyInputSwitcher</RootNamespace>
+    <Product>Connected Display Input Selector</Product>
+    <AssemblyTitle>Connected Display Input Selector</AssemblyTitle>
+    <Description>Select configured inputs on connected DDC/CI displays.</Description>
     <Version>2</Version>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>

@@ -28,6 +28,10 @@ if (args.Length == 4 && args[0] == "--verify-package")
         string executable = Path.Combine(staged, "payload.exe");
         ReleaseUpdater.ExtractExecutable(args[1], executable);
         ReleaseUpdater.ValidateExecutable(executable, ReleaseUpdater.ParseVersion(args[3]), Enum.Parse<Architecture>(args[2]));
+        var metadata = FileVersionInfo.GetVersionInfo(executable);
+        if (metadata.ProductName != "Connected Display Input Selector" ||
+            metadata.FileDescription != "Connected Display Input Selector")
+            throw new InvalidDataException("The published executable must use the renamed product and file description.");
         Console.WriteLine($"PASS: {args[2]} release ZIP shape, executable headers, architecture, and version {args[3]}.");
     }
     finally { Directory.Delete(staged, recursive: true); }
@@ -76,6 +80,81 @@ foreach (string? invalid in new string?[] { null, "-1", "65536", "0xGG" })
     }
 }
 var monitor = new FakeMonitor();
+var capabilityMonitor = new FakeMonitor { Capabilities = "(prot(monitor) model(Test) vcp(10 60(0f 10 11 12 99 11) D6(01 04)))" };
+var discoveredInputs = MonitorProfiles.Discover(capabilityMonitor);
+Check(discoveredInputs.Inputs.Select(input => input.Value).SequenceEqual(
+    ["0x000F", "0x0010", "0x0011", "0x0012", "0x0099"]) &&
+    discoveredInputs.Inputs.Select(input => input.Name).SequenceEqual(
+    ["DisplayPort 1", "DisplayPort 2", "HDMI 1", "HDMI 2", "Input 0x0099"]),
+    "Discover variable input-source lists, remove duplicate values, and label recognized and unknown sources");
+Check(capabilityMonitor.Reads == 1 && capabilityMonitor.Writes == 0,
+    "First-run capability discovery performs exactly one read and no input writes");
+foreach (string invalid in new[]
+{
+    "", "(vcp(10 D6(01 04)))", "(vcp(60))", "(vcp(60()))", "(vcp(60(0F GG)))",
+    "(vcp(60(10000)))", "(vcp(60(0F))", "(vcp(60(0F))))", "(vcp(60(0F) 60(11)))",
+    "(model(60(11)) vcp(10))", "(model(vcp(60(11))) vcp(10))"
+})
+{
+    try
+    {
+        MonitorProfiles.FromCapabilities(invalid);
+        Check(false, "Incomplete or unsupported capabilities require manual setup");
+    }
+    catch (InvalidOperationException)
+    {
+        Check(true, "Incomplete or unsupported capabilities require manual setup");
+    }
+}
+string profilesDirectory = Path.Combine(Path.GetTempPath(), "OdysseyProfilesTest-" + Guid.NewGuid());
+Directory.CreateDirectory(profilesDirectory);
+try
+{
+    string path = Path.Combine(profilesDirectory, "profiles.json");
+    var migrated = MonitorProfiles.FromLegacy(
+        InputSettings.Resolve(new Dictionary<string, string?> { ["HDMI"] = "0x1234" }),
+        InputDisplayNames.Resolve(new Dictionary<string, string?> { ["HDMI"] = "Work PC" }),
+        InputVisibility.Resolve(new Dictionary<string, bool?> { ["Micro HDMI"] = false }));
+    File.WriteAllText(path, JsonSerializer.Serialize(new Dictionary<string, MonitorProfile>
+    {
+        ["monitor-a"] = discoveredInputs, ["monitor-b"] = migrated
+    }));
+    var restored = MonitorProfiles.Load(path);
+    Check(restored["MONITOR-A"].Inputs.Count == 5 &&
+        restored["monitor-b"].Inputs[1].Name == "Work PC" &&
+        restored["monitor-b"].Inputs[1].Value == "0x1234" && !restored["monitor-b"].Inputs[2].Visible,
+        "Per-monitor profiles preserve generic inputs and explicitly imported legacy names, values and visibility");
+    Check(!restored.ContainsKey("unrelated-monitor"),
+        "Legacy migration never applies a profile to an unrelated monitor");
+    File.WriteAllText(path, "{\"monitor-a\":{\"Inputs\":[{\"Id\":\"x\",\"Name\":\"HDMI\",\"Value\":\"65536\"}]}}");
+    try
+    {
+        MonitorProfiles.Load(path);
+        Check(false, "Reject invalid saved profiles without substituting Odyssey defaults");
+    }
+    catch (InvalidOperationException)
+    {
+        Check(true, "Reject invalid saved profiles without substituting Odyssey defaults");
+    }
+}
+finally { Directory.Delete(profilesDirectory, recursive: true); }
+var primaryArea = new System.Drawing.Rectangle(0, 0, 1920, 1040);
+var secondaryArea = new System.Drawing.Rectangle(-1280, 0, 1280, 984);
+var windowSize = new System.Drawing.Size(500, 240);
+Check(WindowPlacement.Resolve(null, windowSize, [secondaryArea, primaryArea], primaryArea) ==
+    new System.Drawing.Point(710, 400), "First launch centers on the primary working area, not the cursor's monitor");
+Check(WindowPlacement.Resolve(new WindowLocation { X = -1000, Y = 200 }, windowSize,
+    [secondaryArea, primaryArea], primaryArea) == new System.Drawing.Point(-1000, 200),
+    "Remember positions on secondary displays with negative coordinates");
+Check(WindowPlacement.Resolve(new WindowLocation { X = -1000, Y = 200 }, windowSize,
+    [primaryArea], primaryArea) == new System.Drawing.Point(710, 400),
+    "Disconnected displays fall back to the primary display center");
+Check(WindowPlacement.Resolve(new WindowLocation { X = 1800, Y = 950 }, windowSize,
+    [primaryArea], primaryArea) == new System.Drawing.Point(1420, 800),
+    "Clamp partly off-screen windows after resolution or DPI changes");
+Check(WindowPlacement.Resolve(new WindowLocation { X = int.MaxValue, Y = int.MinValue }, windowSize,
+    [primaryArea], primaryArea) == new System.Drawing.Point(710, 400),
+    "Extreme saved coordinates recover without arithmetic overflow");
 Check(InputVisibility.Resolve(null).Values.All(visible => visible),
     "All inputs are visible by default for existing installations");
 var visibilitySettings = InputVisibility.Resolve(new Dictionary<string, bool?> { ["HDMI"] = false });
@@ -399,6 +478,8 @@ UiTests:
 Exception? layoutError = null;
 var layoutThread = new Thread(() =>
 {
+    string placementDirectory = Path.Combine(Path.GetTempPath(), "OdysseyPlacementUi-" + Guid.NewGuid());
+    string placementPath = Path.Combine(placementDirectory, "position.json");
     try
     {
         Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
@@ -436,7 +517,8 @@ var layoutThread = new Thread(() =>
             };
         });
         using (var daily = new MainForm(startInTray: true, clock: updateClock,
-            updaterFactory: () => new ReleaseUpdater(new HttpClient(updateHandler, disposeHandler: false))))
+            updaterFactory: () => new ReleaseUpdater(new HttpClient(updateHandler, disposeHandler: false)),
+            windowPositionPath: placementPath))
         {
             var fields = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
             var state = typeof(MainForm).GetMethod("SetStatus", fields)!;
@@ -499,7 +581,68 @@ var layoutThread = new Thread(() =>
         }
         if (args.Contains("--daily-updates-only"))
             return;
-        using (var hidden = new MainForm(startInTray: true))
+        using (var firstTrayLaunch = new MainForm(startInTray: true,
+            windowPositionPath: Path.Combine(placementDirectory, "first-tray.json")))
+        {
+            var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+            firstTrayLaunch.Show();
+            var notify = (NotifyIcon)typeof(MainForm).GetField("tray", flags)!.GetValue(firstTrayLaunch)!;
+            Check(!firstTrayLaunch.Visible && notify.Visible &&
+                !(bool)typeof(MainForm).GetField("placementLoaded", flags)!.GetValue(firstTrayLaunch)!,
+                "A fresh Windows startup launch stays tray-only without loading/showing the main form");
+            typeof(MainForm).GetMethod("ReportFailure", flags)!.Invoke(firstTrayLaunch,
+                [new IOException("Simulated first-run settings failure"), true]);
+            var log = (TextBox)typeof(MainForm).GetField("log", flags)!.GetValue(firstTrayLaunch)!;
+            Check(!firstTrayLaunch.Visible && log.Text.Contains("Simulated first-run settings failure"),
+                "First-run tray failures are logged and notified without opening a modal dialog or main form");
+        }
+        using (var generic = new MainForm(startInTray: true, windowPositionPath: placementPath))
+        {
+            var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+            var monitorList = (ComboBox)typeof(MainForm).GetField("monitors", flags)!.GetValue(generic)!;
+            using var genericMonitor = new NativeMonitor(0, "Generic test", "Generic test", "generic-test");
+            typeof(MainForm).GetField("busy", flags)!.SetValue(generic, true);
+            typeof(MainForm).GetField("stale", flags)!.SetValue(generic, false);
+            monitorList.Items.Add(genericMonitor);
+            monitorList.SelectedIndex = 0;
+            typeof(MainForm).GetField("busy", flags)!.SetValue(generic, false);
+            generic.RenderMonitorProfile(MonitorProfiles.FromCapabilities("(vcp(60(0F 10 11 12)))"),
+                "generic-test", genericMonitor);
+            var genericButtons = (Button[])typeof(MainForm).GetField("switches", flags)!.GetValue(generic)!;
+            var genericTray = (ToolStripMenuItem[])typeof(MainForm).GetField("trayInputs", flags)!.GetValue(generic)!;
+            Check(genericButtons.Length == 4 && genericTray.Length == 4 &&
+                genericButtons.Select(button => button.Text).SequenceEqual(genericTray.Select(item => item.Text)) &&
+                genericButtons.All(button => button.Enabled),
+                "Generic profiles render every advertised input consistently in main and tray actions");
+            var grid = (DataGridView)typeof(MainForm).GetField("profileGrid", flags)!.GetValue(generic)!;
+            grid.Rows[0].Cells[0].Value = "Work PC & dock";
+            grid.Rows[0].Cells[1].Value = "0x1234";
+            grid.Rows[1].Cells[2].Value = false;
+            grid.Rows.RemoveAt(3);
+            grid.Rows.Add("Extra source", "0x99", true);
+            string directory = Path.Combine(Path.GetTempPath(), "OdysseyProfileUi-" + Guid.NewGuid());
+            try
+            {
+                string path = Path.Combine(directory, "profiles.json");
+                generic.SaveMonitorProfile(path);
+                var profile = MonitorProfiles.Load(path)["generic-test"];
+                Check(profile.Inputs.Count == 4 && profile.Inputs[0].Name == "Work PC & dock" &&
+                    profile.Inputs[0].Value == "0x1234" && !profile.Inputs[1].Visible &&
+                    profile.Inputs[3].Value == "0x99",
+                    "Manual setup saves additions, removals, names, values and visibility together");
+                var confirmation = generic.CreateInputConfirmation("Generic test", 0, 0x1234);
+                using (confirmation.Dialog)
+                    Check(confirmation.Dialog.Controls.OfType<TableLayoutPanel>().Single()
+                        .Controls.OfType<Label>().First().Text == "Switch to Work PC & dock?",
+                        "Generic confirmation uses the configured input name");
+                generic.RenderMonitorProfile(new MonitorProfile(), "other-monitor", genericMonitor);
+                Check(((Button[])typeof(MainForm).GetField("switches", flags)!.GetValue(generic)!).Length == 0 &&
+                    !generic.Visible,
+                    "Manual fallback clears unrelated mappings without showing a tray-started window");
+            }
+            finally { if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true); }
+        }
+        using (var hidden = new MainForm(startInTray: true, windowPositionPath: placementPath))
         {
             hidden.Show();
             Check(!hidden.Visible && hidden.IsHandleCreated,
@@ -515,35 +658,75 @@ var layoutThread = new Thread(() =>
                 .OfType<ToolStripMenuItem>().Single(item => item.Text == "E&xit").PerformClick();
             Check(hidden.IsDisposed, "Settings Exit stops the hidden app rather than hiding it again");
         }
-        foreach (string pendingOperation in new[] { "busy", "confirming" })
+        foreach (bool fromTray in new[] { false, true })
+        foreach (string pendingOperation in new[] { "none", "busy", "confirming" })
         {
-            using var waiting = new MainForm(startInTray: true);
+            using var waiting = new MainForm(startInTray: true, windowPositionPath: placementPath);
             _ = waiting.Handle;
             var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
-            var pending = typeof(MainForm).GetField(pendingOperation, flags)!;
-            pending.SetValue(waiting, true);
-            var exit = ((ToolStripMenuItem)waiting.MainMenuStrip!.Items[0]).DropDownItems
-                .OfType<ToolStripMenuItem>().Single(item => item.Text == "E&xit");
+            var pending = pendingOperation == "none" ? null : typeof(MainForm).GetField(pendingOperation, flags)!;
+            pending?.SetValue(waiting, true);
+            var items = fromTray
+                ? ((ContextMenuStrip)typeof(MainForm).GetField("trayMenu", flags)!.GetValue(waiting)!).Items
+                : ((ToolStripMenuItem)waiting.MainMenuStrip!.Items[0]).DropDownItems;
+            var exit = items.OfType<ToolStripMenuItem>().Single(item => item.Text == (fromTray ? "&Quit" : "E&xit"));
             exit.PerformClick();
+            if (pending is null)
+            {
+                Check(waiting.IsDisposed, $"{exit.Text} stops the hidden app while idle");
+                continue;
+            }
             Check(!waiting.IsDisposed && (bool)typeof(MainForm).GetField("closeWhenIdle", flags)!.GetValue(waiting)!,
-                $"Settings Exit waits for an outstanding {pendingOperation} operation");
+                $"{exit.Text} waits for an outstanding {pendingOperation} operation");
             pending.SetValue(waiting, false);
             exit.PerformClick();
-            Check(waiting.IsDisposed, $"Settings Exit completes once {pendingOperation} is cleared");
+            Check(waiting.IsDisposed, $"{exit.Text} completes once {pendingOperation} is cleared");
         }
         // Forms must be disposed before the shared font used during their paint/teardown.
         using var originalFont = new System.Drawing.Font("Segoe UI", 9);
-        using var main = new MainForm();
+        using (var firstLaunch = new MainForm(windowPositionPath: placementPath))
+        {
+            if (File.Exists(placementPath)) File.Delete(placementPath);
+            firstLaunch.Show();
+            var area = Screen.PrimaryScreen!.WorkingArea;
+            Check(firstLaunch.Location == WindowPlacement.Resolve(null, firstLaunch.Size, [area], area),
+                "First shown main form is centered after its layout is complete");
+            var remembered = new System.Drawing.Point(area.Left + 30, area.Top + 40);
+            firstLaunch.Location = remembered;
+            firstLaunch.Hide();
+            Check(JsonSerializer.Deserialize<WindowLocation>(File.ReadAllText(placementPath)) is { } position &&
+                position.X == remembered.X && position.Y == remembered.Y,
+                "Hiding the main window persists its last normal location");
+            typeof(MainForm).GetMethod("ShowMainWindow",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.Invoke(firstLaunch, null);
+            Check(firstLaunch.Location == remembered, "Tray reopening preserves the user's window position");
+            firstLaunch.WindowState = FormWindowState.Minimized;
+            Check(JsonSerializer.Deserialize<WindowLocation>(File.ReadAllText(placementPath)) is { } minimizedPosition &&
+                minimizedPosition.X == remembered.X && minimizedPosition.Y == remembered.Y,
+                "Minimizing never persists minimized window coordinates");
+        }
+        using (var restartedPosition = new MainForm(startInTray: true, windowPositionPath: placementPath))
+        {
+            restartedPosition.Show();
+            Check(!restartedPosition.Visible, "Position restoration does not show a tray-started main form");
+            typeof(MainForm).GetMethod("ShowMainWindow",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.Invoke(restartedPosition, null);
+            var area = Screen.PrimaryScreen!.WorkingArea;
+            Check(restartedPosition.Location == new System.Drawing.Point(area.Left + 30, area.Top + 40),
+                "A new app instance restores the persisted main-window location when opened");
+        }
+        using var main = new MainForm(windowPositionPath: placementPath);
         var menu = main.MainMenuStrip ?? throw new Exception("Standard menu bar is missing.");
         var settingsMenu = (ToolStripMenuItem)menu.Items[0];
-        string[] expectedMenu = ["&General...", "&Inputs...", "&Advanced...", "Check for updates...", "About Odyssey...", "E&xit"];
+        string[] expectedMenu = ["&General...", "&Inputs...", "&Advanced...", "Check for updates...",
+            "About Connected Display Input Selector...", "E&xit"];
         Check(settingsMenu.Text == "&Settings" && settingsMenu.DropDownItems.OfType<ToolStripMenuItem>()
             .Select(item => item.Text).SequenceEqual(expectedMenu),
             "Standard Settings menu exposes preferences, logging, updates, About and Exit with keyboard mnemonics");
         var mainLayout = main.Controls.OfType<TableLayoutPanel>().Single();
-        var footer = (FlowLayoutPanel)mainLayout.GetControlFromPosition(0, 5)!;
-        Check(footer.Controls.OfType<Button>().Select(button => button.Text).SequenceEqual(["Run in tray"]),
-            "Footer retains Run in tray but no Settings button");
+        Check(mainLayout.RowCount == 6 && !mainLayout.Controls.OfType<FlowLayoutPanel>().Any() &&
+            mainLayout.Controls.OfType<Label>().Any(label => mainLayout.GetRow(label) == 5),
+            "Main window has no Run in tray button or empty footer row");
         var trayMenu = (ContextMenuStrip)typeof(MainForm).GetField("trayMenu",
             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(main)!;
         var trayMonitor = (ToolStripMenuItem)typeof(MainForm).GetField("trayMonitor",
@@ -552,12 +735,13 @@ var layoutThread = new Thread(() =>
             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(main)!;
         var trayHiddenMessage = (ToolStripMenuItem)typeof(MainForm).GetField("trayAllInputsHidden",
             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(main)!;
-        Check(trayMenu.Items.Count == 6 && trayMenu.Items[0] == trayMonitor &&
+        Check(trayMenu.Items.Count == 8 && trayMenu.Items[0] == trayMonitor &&
             trayMenu.Items[1] is ToolStripSeparator &&
-            trayMenu.Items.Cast<ToolStripItem>().Skip(2).SequenceEqual(
+            trayMenu.Items.Cast<ToolStripItem>().Skip(2).Take(4).SequenceEqual(
                 menuInputs.Cast<ToolStripItem>().Append(trayHiddenMessage)) &&
+            trayMenu.Items[6] is ToolStripSeparator && trayMenu.Items[7].Text == "&Quit" &&
             trayMenu.Items.OfType<ToolStripMenuItem>().All(item => !item.HasDropDownItems),
-            "Tray menu contains only the monitor heading, input choices and all-hidden guidance");
+            "Tray menu contains the monitor heading, input choices, all-hidden guidance and Quit");
         Check(main.FormBorderStyle == FormBorderStyle.FixedSingle && !main.MaximizeBox,
             "Main window cannot be manually resized or maximized");
         var advanced = (Form)typeof(MainForm).GetField("advanced",
@@ -635,7 +819,7 @@ var layoutThread = new Thread(() =>
             var namesFromDisk = JsonSerializer.Deserialize<Dictionary<string, string?>>(File.ReadAllText(namesPath))!;
             Check(namesFromDisk.Keys.Order().SequenceEqual(new[] { "DisplayPort", "HDMI", "Micro HDMI" }.Order()),
                 "Names persist under stable input identities");
-            using (var restarted = new MainForm())
+            using (var restarted = new MainForm(windowPositionPath: placementPath))
             {
                 restarted.LoadInputNames(namesPath);
                 var restoredButtons = (Button[])typeof(MainForm).GetField("switches",
@@ -722,7 +906,7 @@ var layoutThread = new Thread(() =>
             main.SaveInputVisibility(visibilityPath);
             Check(File.ReadAllText(combinedNamesPath) == originalNamesFile,
                 "Saving visibility leaves the persisted custom-name file unchanged");
-            using (var restarted = new MainForm())
+            using (var restarted = new MainForm(windowPositionPath: placementPath))
             {
                 restarted.LoadInputNames(combinedNamesPath);
                 restarted.LoadInputVisibility(visibilityPath);
@@ -918,6 +1102,7 @@ var layoutThread = new Thread(() =>
         }
     }
     catch (Exception error) { layoutError = error; }
+    finally { if (Directory.Exists(placementDirectory)) Directory.Delete(placementDirectory, recursive: true); }
 });
 layoutThread.SetApartmentState(ApartmentState.STA);
 layoutThread.Start();
@@ -962,8 +1147,9 @@ internal sealed class FakeMonitor : IMonitorConnection
     internal int Writes, Reads;
     internal uint LastValue;
     internal bool Fail;
+    internal string Capabilities = "";
     public uint ReadInput() { Reads++; return LastValue; }
-    public string ReadCapabilities() { Reads++; return ""; }
+    public string ReadCapabilities() { Reads++; return Capabilities; }
     public void WriteInput(uint value)
     {
         Writes++;
