@@ -35,7 +35,9 @@ Open `dist\win-x64\OdysseyInputSwitcher.exe` on an Intel/AMD x64 PC, or `dist\wi
 
 Discovery refreshes automatically after input-switch attempts, display-topology changes, and Windows resume. Rapid changes are debounced; discovery waits for any outstanding monitor operation before replacing its handles. **Refresh** is also available manually. Refreshing and selecting never send input commands.
 
-The main and settings windows have fixed borders: they cannot be manually resized or maximized. The app still uses per-monitor DPI scaling when moved between displays. The main window keeps a minimum width but sizes its height to the content, with no empty status row when idle; settings open centered over it, with scrolling available for content that exceeds the window.
+The main and settings windows have fixed borders: they cannot be manually resized or maximized. The app still uses per-monitor DPI scaling when moved between displays. The compact main window uses a 440-pixel logical minimum client width, smaller buttons, and content-sized height, with no empty status row when idle. Hover over any button for an explanation.
+
+Settings open centered over the main window and grow to fit every tab without scrolling or cutting off actions. Each settings button has a visible description beside it explaining what it changes and whether a separate Save is needed. Only the diagnostic log scrolls.
 
 The input confirmation grows to fit its full warning and buttons at larger font sizes. The main window scrolls when its content cannot fit, and input buttons size to their text.
 
@@ -114,7 +116,7 @@ Those direct commands publish executables only. Use the full build script to pro
 
 Cross-publishing ARM64 on an x64 PC is supported; it does not prove ARM64 execution. The hardware-free tests cover value parsing, saved-value overrides and preset restoration, sole-monitor selection, missing/duplicate/reordered default identities, monitor and confirmation preference serialization, single-write/no-readback behavior, write failures without retries, native interop structure sizes, and exactly-once release of valid zero-valued physical-monitor handles. Physical switching and native ARM64 execution need the corresponding hardware.
 
-Input-name tests cover validation, persistence/restart, restoring defaults, literal ampersands, stable VCP mappings, and long-label/editor/confirmation layout at 10, 16, and 24pt fonts. Repeat the suite with `dotnet run --project tests\SwitcherTests.csproj -c Release -- --dpi-unaware` to also exercise 100% logical scaling independently of the desktop's DPI setting.
+Input-name tests cover validation, persistence/restart, restoring defaults, literal ampersands, stable VCP mappings, and long-label/editor/confirmation layout at 10, 16, and 24pt fonts. Layout checks cover compact default window dimensions, button rendering and descriptions, and every settings tab fitting without scrolling. Repeat the suite with `dotnet run --project tests\SwitcherTests.csproj -c Release -- --dpi-unaware` to also exercise 100% logical scaling independently of the desktop's DPI setting. Add `--layout-only` to run the UI/preference checks without the package and installer tests. UI painting failures fail the runner rather than opening a JIT error dialog.
 
 Visibility tests exercise all eight show/hide combinations at those font sizes, including main/tray parity, gap-free reflow, all-hidden guidance, restoring hidden inputs, persistence/restart, and preservation of custom names and VCP values.
 
