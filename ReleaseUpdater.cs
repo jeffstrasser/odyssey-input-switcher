@@ -12,6 +12,15 @@ namespace OdysseyInputSwitcher;
 
 internal sealed record ReleaseUpdate(Version Version, Uri DownloadUrl, string Sha256);
 
+internal sealed class UpdateCheckSchedule(TimeProvider clock)
+{
+    private DateTimeOffset nextCheck = clock.GetUtcNow();
+
+    internal bool IsDue => clock.GetUtcNow() >= nextCheck;
+
+    internal void CheckStarted() => nextCheck = clock.GetUtcNow().AddHours(24);
+}
+
 internal sealed class ReleaseUpdater : IDisposable
 {
     internal const string RepositoryUrl = "https://github.com/jeffstrasser/odyssey-input-switcher";
