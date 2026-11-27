@@ -485,12 +485,12 @@ var layoutThread = new Thread(() =>
         string visibilityDirectory = Path.Combine(AppContext.BaseDirectory, "visibility-test-" + Guid.NewGuid().ToString("N"));
         string visibilityPath = Path.Combine(visibilityDirectory, "input-visibility.json");
         string combinedNamesPath = Path.Combine(visibilityDirectory, "input-names.json");
+        using var originalFont = (System.Drawing.Font)main.Font.Clone();
         main.Show();
         try
         {
             main.SaveInputNames(combinedNamesPath);
             string originalNamesFile = File.ReadAllText(combinedNamesPath);
-            var originalFont = main.Font;
             foreach (float size in new[] { 10f, 16f, 24f })
             {
                 using var font = new System.Drawing.Font("Segoe UI", size);
@@ -649,6 +649,8 @@ var layoutThread = new Thread(() =>
                 Check(dialog.AcceptButton is Button button && button.Text == "Cancel",
                     $"Cancel remains default at {size}pt");
             }
+            main.Font = originalFont;
+            advanced.Font = originalFont;
         }
     }
     catch (Exception error) { layoutError = error; }
