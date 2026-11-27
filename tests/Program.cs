@@ -76,6 +76,64 @@ foreach (string? invalid in new string?[] { null, "-1", "65536", "0xGG" })
     }
 }
 var monitor = new FakeMonitor();
+var capabilityMonitor = new FakeMonitor { Capabilities = "(prot(monitor) model(Test) vcp(10 60(0f 10 11 12 99 11) D6(01 04)))" };
+var discoveredInputs = MonitorProfiles.Discover(capabilityMonitor);
+Check(discoveredInputs.Inputs.Select(input => input.Value).SequenceEqual(
+    ["0x000F", "0x0010", "0x0011", "0x0012", "0x0099"]) &&
+    discoveredInputs.Inputs.Select(input => input.Name).SequenceEqual(
+    ["DisplayPort 1", "DisplayPort 2", "HDMI 1", "HDMI 2", "Input 0x0099"]),
+    "Discover variable input-source lists, remove duplicate values, and label recognized and unknown sources");
+Check(capabilityMonitor.Reads == 1 && capabilityMonitor.Writes == 0,
+    "First-run capability discovery performs exactly one read and no input writes");
+foreach (string invalid in new[]
+{
+    "", "(vcp(10 D6(01 04)))", "(vcp(60))", "(vcp(60()))", "(vcp(60(0F GG)))",
+    "(vcp(60(10000)))", "(vcp(60(0F))", "(vcp(60(0F))))", "(vcp(60(0F) 60(11)))",
+    "(model(60(11)) vcp(10))"
+})
+{
+    try
+    {
+        MonitorProfiles.FromCapabilities(invalid);
+        Check(false, "Incomplete or unsupported capabilities require manual setup");
+    }
+    catch (InvalidOperationException)
+    {
+        Check(true, "Incomplete or unsupported capabilities require manual setup");
+    }
+}
+string profilesDirectory = Path.Combine(Path.GetTempPath(), "OdysseyProfilesTest-" + Guid.NewGuid());
+Directory.CreateDirectory(profilesDirectory);
+try
+{
+    string path = Path.Combine(profilesDirectory, "profiles.json");
+    var migrated = MonitorProfiles.FromLegacy(
+        InputSettings.Resolve(new Dictionary<string, string?> { ["HDMI"] = "0x1234" }),
+        InputDisplayNames.Resolve(new Dictionary<string, string?> { ["HDMI"] = "Work PC" }),
+        InputVisibility.Resolve(new Dictionary<string, bool?> { ["Micro HDMI"] = false }));
+    File.WriteAllText(path, JsonSerializer.Serialize(new Dictionary<string, MonitorProfile>
+    {
+        ["monitor-a"] = discoveredInputs, ["monitor-b"] = migrated
+    }));
+    var restored = MonitorProfiles.Load(path);
+    Check(restored["MONITOR-A"].Inputs.Count == 5 &&
+        restored["monitor-b"].Inputs[1].Name == "Work PC" &&
+        restored["monitor-b"].Inputs[1].Value == "0x1234" && !restored["monitor-b"].Inputs[2].Visible,
+        "Per-monitor profiles preserve generic inputs and explicitly imported legacy names, values and visibility");
+    Check(!restored.ContainsKey("unrelated-monitor"),
+        "Legacy migration never applies a profile to an unrelated monitor");
+    File.WriteAllText(path, "{\"monitor-a\":{\"Inputs\":[{\"Id\":\"x\",\"Name\":\"HDMI\",\"Value\":\"65536\"}]}}");
+    try
+    {
+        MonitorProfiles.Load(path);
+        Check(false, "Reject invalid saved profiles without substituting Odyssey defaults");
+    }
+    catch (InvalidOperationException)
+    {
+        Check(true, "Reject invalid saved profiles without substituting Odyssey defaults");
+    }
+}
+finally { Directory.Delete(profilesDirectory, recursive: true); }
 Check(InputVisibility.Resolve(null).Values.All(visible => visible),
     "All inputs are visible by default for existing installations");
 var visibilitySettings = InputVisibility.Resolve(new Dictionary<string, bool?> { ["HDMI"] = false });
@@ -499,6 +557,52 @@ var layoutThread = new Thread(() =>
         }
         if (args.Contains("--daily-updates-only"))
             return;
+        using (var generic = new MainForm(startInTray: true))
+        {
+            var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+            var monitorList = (ComboBox)typeof(MainForm).GetField("monitors", flags)!.GetValue(generic)!;
+            using var genericMonitor = new NativeMonitor(0, "Generic test", "Generic test", "generic-test");
+            typeof(MainForm).GetField("busy", flags)!.SetValue(generic, true);
+            typeof(MainForm).GetField("stale", flags)!.SetValue(generic, false);
+            monitorList.Items.Add(genericMonitor);
+            monitorList.SelectedIndex = 0;
+            typeof(MainForm).GetField("busy", flags)!.SetValue(generic, false);
+            generic.RenderMonitorProfile(MonitorProfiles.FromCapabilities("(vcp(60(0F 10 11 12)))"),
+                "generic-test", genericMonitor);
+            var genericButtons = (Button[])typeof(MainForm).GetField("switches", flags)!.GetValue(generic)!;
+            var genericTray = (ToolStripMenuItem[])typeof(MainForm).GetField("trayInputs", flags)!.GetValue(generic)!;
+            Check(genericButtons.Length == 4 && genericTray.Length == 4 &&
+                genericButtons.Select(button => button.Text).SequenceEqual(genericTray.Select(item => item.Text)) &&
+                genericButtons.All(button => button.Enabled),
+                "Generic profiles render every advertised input consistently in main and tray actions");
+            var grid = (DataGridView)typeof(MainForm).GetField("profileGrid", flags)!.GetValue(generic)!;
+            grid.Rows[0].Cells[0].Value = "Work PC & dock";
+            grid.Rows[0].Cells[1].Value = "0x1234";
+            grid.Rows[1].Cells[2].Value = false;
+            grid.Rows.RemoveAt(3);
+            grid.Rows.Add("Extra source", "0x99", true);
+            string directory = Path.Combine(Path.GetTempPath(), "OdysseyProfileUi-" + Guid.NewGuid());
+            try
+            {
+                string path = Path.Combine(directory, "profiles.json");
+                generic.SaveMonitorProfile(path);
+                var profile = MonitorProfiles.Load(path)["generic-test"];
+                Check(profile.Inputs.Count == 4 && profile.Inputs[0].Name == "Work PC & dock" &&
+                    profile.Inputs[0].Value == "0x1234" && !profile.Inputs[1].Visible &&
+                    profile.Inputs[3].Value == "0x99",
+                    "Manual setup saves additions, removals, names, values and visibility together");
+                var confirmation = generic.CreateInputConfirmation("Generic test", 0, 0x1234);
+                using (confirmation.Dialog)
+                    Check(confirmation.Dialog.Controls.OfType<TableLayoutPanel>().Single()
+                        .Controls.OfType<Label>().First().Text == "Switch to Work PC & dock?",
+                        "Generic confirmation uses the configured input name");
+                generic.RenderMonitorProfile(new MonitorProfile(), "other-monitor", genericMonitor);
+                Check(((Button[])typeof(MainForm).GetField("switches", flags)!.GetValue(generic)!).Length == 0 &&
+                    !generic.Visible,
+                    "Manual fallback clears unrelated mappings without showing a tray-started window");
+            }
+            finally { if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true); }
+        }
         using (var hidden = new MainForm(startInTray: true))
         {
             hidden.Show();
@@ -971,8 +1075,9 @@ internal sealed class FakeMonitor : IMonitorConnection
     internal int Writes, Reads;
     internal uint LastValue;
     internal bool Fail;
+    internal string Capabilities = "";
     public uint ReadInput() { Reads++; return LastValue; }
-    public string ReadCapabilities() { Reads++; return ""; }
+    public string ReadCapabilities() { Reads++; return Capabilities; }
     public void WriteInput(uint value)
     {
         Writes++;

@@ -46,10 +46,10 @@ internal sealed class MainForm : Form
         WordWrap = false, Dock = DockStyle.Fill, AccessibleName = "Diagnostic log",
         Font = new Font("Consolas", 9), BackColor = Color.White
     };
-    private readonly string[] inputNames = ["DisplayPort", "HDMI", "Micro HDMI"];
-    private readonly string[] displayNames = ["DisplayPort", "HDMI", "Micro HDMI"];
+    private string[] inputNames = ["DisplayPort", "HDMI", "Micro HDMI"];
+    private string[] displayNames = ["DisplayPort", "HDMI", "Micro HDMI"];
     private readonly TextBox[] nameFields = new TextBox[3];
-    private readonly bool[] visibleInputs = [true, true, true];
+    private bool[] visibleInputs = [true, true, true];
     private readonly CheckBox[] visibilityFields = new CheckBox[3];
     private readonly Label allInputsHidden = new()
     {
@@ -57,8 +57,25 @@ internal sealed class MainForm : Form
         AutoSize = true, Dock = DockStyle.Fill, Visible = false
     };
     private readonly TextBox[] values = new TextBox[3];
-    private readonly Button[] switches = new Button[3];
-    private readonly ToolStripMenuItem[] trayInputs = new ToolStripMenuItem[3];
+    private Button[] switches = new Button[3];
+    private ToolStripMenuItem[] trayInputs = new ToolStripMenuItem[3];
+    private TableLayoutPanel mainInputs = null!;
+    private readonly DataGridView profileGrid = new()
+    {
+        Dock = DockStyle.Top, Height = 180, AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
+        AllowUserToAddRows = true, AllowUserToDeleteRows = true, RowHeadersVisible = true,
+        AccessibleName = "Selected monitor input configuration"
+    };
+    private readonly Label profileExplanation = new() { AutoSize = true, Dock = DockStyle.Fill };
+    private Dictionary<string, MonitorProfile> profiles = new(StringComparer.OrdinalIgnoreCase);
+    private MonitorProfile? activeProfile;
+    private MonitorProfile? legacyProfile;
+    private NativeMonitor? profileMonitor;
+    private string? profileIdentity;
+    private bool profileStoreAvailable = true;
+    private bool profileEditorReady;
+    private bool setupPending;
+    private static string ProfilesPath => Path.Combine(SettingsDirectory, "monitor-profiles.json");
     private readonly ToolStripMenuItem trayAllInputsHidden = new("All inputs hidden - Settings > Inputs...")
     {
         Enabled = false, Visible = false
@@ -125,13 +142,16 @@ internal sealed class MainForm : Form
         BuildTray();
         ApplyInputNames(InputDisplayNames.Resolve(null));
         ApplySettings(InputSettings.Resolve(null));
-        monitors.SelectedIndexChanged += (_, _) =>
+        monitors.SelectedIndexChanged += async (_, _) =>
         {
             if (resourcesDisposed)
                 return;
             UpdateControls();
             if (!busy && !stale)
+            {
                 SetSelectionStatus();
+                await PrepareMonitorProfileAsync();
+            }
         };
         refresh.Click += (_, _) => QueueRefresh("Manual refresh");
         saveDefault.Click += (_, _) => SaveDefault();
@@ -157,6 +177,11 @@ internal sealed class MainForm : Form
         };
         restore.Click += (_, _) =>
         {
+            if (activeProfile is not null)
+            {
+                UseLegacyProfile(usePreset: true);
+                return;
+            }
             ApplySettings(InputSettings.Resolve(null));
             Append("Restored working profile: DisplayPort 0x0F, HDMI 0x05, Micro HDMI 0x06.");
             SetStatus("Working input values restored. Save to keep them.");
@@ -272,6 +297,21 @@ internal sealed class MainForm : Form
             LoadSettings();
             LoadInputNames(InputNamesPath);
             LoadInputVisibility(InputVisibilityPath);
+            if (File.Exists(SettingsPath) || File.Exists(InputNamesPath) || File.Exists(InputVisibilityPath))
+                legacyProfile = MonitorProfiles.FromLegacy(
+                    inputNames.Select((name, i) => (name, i)).ToDictionary(entry => entry.name, entry => values[entry.i].Text),
+                    inputNames.Select((name, i) => (name, i)).ToDictionary(entry => entry.name, entry => displayNames[entry.i]),
+                    inputNames.Select((name, i) => (name, i)).ToDictionary(entry => entry.name, entry => visibleInputs[entry.i]));
+            try
+            {
+                profiles = MonitorProfiles.Load(ProfilesPath);
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or
+                JsonException or InvalidOperationException)
+            {
+                profileStoreAvailable = false;
+                ReportSettingsFailure(error);
+            }
             LoadPreferences();
             RefreshStartupSetting();
             InitializationCompleted?.Invoke(this, EventArgs.Empty);
@@ -303,8 +343,8 @@ internal sealed class MainForm : Form
         // ClientSize excludes visible scrollbars as well as the native window frame.
         MinimumSize = new Size((int)Math.Ceiling(440 * DeviceDpi / 96d) + Width - ClientSize.Width,
             SizeFromClientSize(Size.Empty).Height);
-        if (switches[0]?.Parent is TableLayoutPanel inputs)
-            SizeInputButtons(inputs);
+        if (mainInputs is not null)
+            SizeInputButtons(mainInputs);
     }
 
     private void BuildMainWindow()
@@ -348,6 +388,7 @@ internal sealed class MainForm : Form
             RowCount = 2, ColumnCount = 3,
             Margin = new Padding(0, 4, 0, 6)
         };
+        mainInputs = inputs;
         inputs.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
         inputs.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         for (int i = 0; i < inputNames.Length; i++)
@@ -699,6 +740,7 @@ internal sealed class MainForm : Form
         Show();
         WindowState = FormWindowState.Normal;
         Activate();
+        PresentProfileSetup();
     }
 
     private void ShowAdvanced(int tab = 0)
@@ -787,7 +829,13 @@ internal sealed class MainForm : Form
         settingsUpdate.Enabled = !busy && !confirming && !exiting && !checkingForUpdates;
         runAtStartup.Enabled = !busy && !exiting;
         diagnostics.Enabled = selected;
-        save.Enabled = restore.Enabled = !busy && !exiting;
+        save.Enabled = restore.Enabled = !busy && !exiting && (activeProfile is null || monitor is not null);
+        profileGrid.Enabled = !busy && !confirming && !exiting && monitor is not null;
+        if (profileEditorReady)
+            foreach (var button in settingsTabs.TabPages[1].Controls.OfType<TableLayoutPanel>()
+                .SelectMany(panel => panel.Controls.OfType<TableLayoutPanel>())
+                .SelectMany(panel => panel.Controls.OfType<Button>()))
+                button.Enabled = !busy && !confirming && !exiting && monitor is not null;
         confirmSwitch.Enabled = !busy && !exiting;
         clearDefault.Enabled = !busy && preferences.DefaultMonitorId is not null;
         saveDefault.Enabled = selected && monitor?.StableId is not null &&
@@ -801,12 +849,14 @@ internal sealed class MainForm : Form
         trayMonitor.Text = monitor is null ? "No monitor selected" : monitor.DisplayName;
         string trayText = monitor is null ? "Odyssey - no monitor selected" : "Odyssey - " + monitor.DisplayName;
         tray.Text = trayText[..Math.Min(63, trayText.Length)];
-        for (int i = 0; i < values.Length; i++)
+        for (int i = 0; i < switches.Length; i++)
         {
-            if (values[i] is null)
+            if (activeProfile is null && values[i] is null)
                 continue;
-            values[i].Enabled = !busy;
-            bool enabled = selected && visibleInputs[i] && InputValue.TryParse(values[i].Text, out _);
+            if (activeProfile is null)
+                values[i].Enabled = !busy;
+            bool enabled = selected && visibleInputs[i] && InputValue.TryParse(ConfiguredValue(i), out _) &&
+                (activeProfile is null || profileMonitor == monitor);
             switches[i].Enabled = enabled;
             if (trayInputs[i] is not null)
                 trayInputs[i].Enabled = enabled;
@@ -1038,8 +1088,10 @@ internal sealed class MainForm : Form
         inventory = null;
     }
 
-    private Task RefreshAsync() => RunAsync(async () =>
+    private async Task RefreshAsync()
     {
+        await RunAsync(async () =>
+        {
         SetStatus("Discovering connected monitors...");
         ReleaseInventory();
         int generation = displayGeneration;
@@ -1061,13 +1113,271 @@ internal sealed class MainForm : Form
         monitors.SelectedIndex = MonitorSelection.Choose(CurrentIdentities(), preferences.DefaultMonitorId);
         SetSelectionStatus();
         Append($"Enumerated {inventory.Monitors.Count} physical monitor(s). No input commands sent.");
-    }, showErrors: false);
+        }, showErrors: false);
+        if (!exiting && !stale)
+            await PrepareMonitorProfileAsync();
+    }
 
     private void SetSelectionStatus()
     {
         SetStatus(monitors.Items.Count == 0 ? "No connected physical monitor found."
             : SelectedMonitor is null ? "Choose a monitor. No unique saved default is connected."
             : "");
+    }
+
+    private string ConfiguredValue(int index) =>
+        activeProfile is null ? values[index].Text : activeProfile.Inputs[index].Value;
+
+    private async Task PrepareMonitorProfileAsync()
+    {
+        NativeMonitor? selected = SelectedMonitor;
+        if (selected is null || selected == profileMonitor || busy || confirming || exiting)
+            return;
+        string? identity = selected.StableId is not null &&
+            MonitorSelection.FindUnique(CurrentIdentities(), selected.StableId) == monitors.SelectedIndex
+            ? selected.StableId : null;
+        RenderMonitorProfile(new MonitorProfile(), identity, selected);
+        if (identity is not null && profiles.TryGetValue(identity, out var saved))
+        {
+            RenderMonitorProfile(saved, identity, selected);
+            return;
+        }
+        int generation = displayGeneration;
+        MonitorProfile discovered = new();
+        string explanation = "Review the advertised inputs below, correct them if necessary, and choose Save monitor inputs.\r\n" +
+            "Advertised values are not proof of working input switching. No input commands were sent.";
+        await RunAsync(async () =>
+        {
+            SetStatus("Reading this monitor's input-source capabilities...");
+            try
+            {
+                discovered = await Task.Run(() => MonitorProfiles.Discover(selected));
+                Append("Read advertised input-source values for " + selected.Description + ". No input commands sent.");
+            }
+            catch (Exception error) when (error is Win32Exception or InvalidOperationException)
+            {
+                explanation = "Input discovery was unavailable: " + error.Message + "\r\n" +
+                    "Add input names and VCP 0x60 values from your monitor's documentation or a known-working configuration, " +
+                    "then choose Save monitor inputs. Do not guess or brute-force values.";
+                Append("Input discovery failed for " + selected.Description + ": " + error);
+            }
+        }, showErrors: false);
+        if (exiting || stale || generation != displayGeneration || SelectedMonitor != selected)
+            return;
+        RenderMonitorProfile(discovered, identity, selected);
+        profileExplanation.Text = explanation + (identity is null
+            ? "\r\nThis monitor has no unique Windows identity. Configuration can only be used for this connection."
+            : "");
+        setupPending = true;
+        SetStatus("Configure this monitor in Settings > Inputs... before switching.");
+        PresentProfileSetup();
+    }
+
+    private void PresentProfileSetup()
+    {
+        if (!setupPending || busy || confirming || exiting || SelectedMonitor != profileMonitor)
+            return;
+        if (!Visible || startInTray)
+        {
+            tray.ShowBalloonTip(5000, "Monitor input setup needed",
+                "Double-click the tray icon and open Settings > Inputs to configure this monitor.", ToolTipIcon.Info);
+            return;
+        }
+        setupPending = false;
+        ShowAdvanced(1);
+    }
+
+    internal void RenderMonitorProfile(MonitorProfile profile, string? identity, NativeMonitor? monitor)
+    {
+        MonitorProfiles.Validate(profile);
+        activeProfile = profile;
+        profileMonitor = monitor;
+        profileIdentity = identity;
+        setupPending = false;
+        BuildProfileEditor();
+        mainInputs.SuspendLayout();
+        try
+        {
+            foreach (var button in switches)
+            {
+                mainInputs.Controls.Remove(button);
+                button.Dispose();
+            }
+            foreach (var item in trayInputs)
+            {
+                trayMenu.Items.Remove(item);
+                item.Dispose();
+            }
+            inputNames = profile.Inputs.Select(input => input.Id).ToArray();
+            displayNames = profile.Inputs.Select(input => input.Name).ToArray();
+            visibleInputs = profile.Inputs.Select(input => input.Visible).ToArray();
+            switches = new Button[profile.Inputs.Count];
+            trayInputs = new ToolStripMenuItem[profile.Inputs.Count];
+            mainInputs.SetColumnSpan(allInputsHidden, 1);
+            mainInputs.ColumnStyles.Clear();
+            mainInputs.ColumnCount = Math.Max(1, profile.Inputs.Count);
+            int visibleCount = visibleInputs.Count(value => value);
+            for (int i = 0; i < switches.Length; i++)
+            {
+                int index = i;
+                bool fill = visibleInputs[i] || (visibleCount == 0 && i == 0);
+                mainInputs.ColumnStyles.Add(new ColumnStyle(fill ? SizeType.Percent : SizeType.Absolute,
+                    fill ? 100f / Math.Max(1, visibleCount) : 0));
+                var button = MakeButton(displayNames[i], primary: true);
+                button.UseMnemonic = false;
+                button.AccessibleName = "Switch to " + displayNames[i];
+                button.Dock = DockStyle.Fill;
+                button.MinimumSize = new Size(0, 36);
+                DescribeButton(button, "Switch the selected monitor to " + displayNames[i] + ".");
+                button.Click += async (_, _) => await SwitchAsync(index);
+                button.FontChanged += (_, _) => SizeInputButtons(mainInputs);
+                switches[i] = button;
+                mainInputs.Controls.Add(button, i, 0);
+                button.Visible = visibleInputs[i];
+                trayInputs[i] = new ToolStripMenuItem(displayNames[i].Replace("&", "&&"))
+                {
+                    AccessibleName = "Switch to " + displayNames[i], Visible = visibleInputs[i]
+                };
+                trayInputs[i].Click += async (_, _) => await SwitchAsync(index);
+                trayMenu.Items.Insert(2 + i, trayInputs[i]);
+            }
+            if (switches.Length == 0)
+                mainInputs.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            mainInputs.SetColumnSpan(allInputsHidden, mainInputs.ColumnCount);
+            allInputsHidden.Text = switches.Length == 0
+                ? "No inputs configured. Open Settings > Inputs... to add them."
+                : "All inputs are hidden. Open Settings > Inputs... to show them again.";
+            trayAllInputsHidden.Text = switches.Length == 0
+                ? "No inputs configured - Settings > Inputs..." : "All inputs hidden - Settings > Inputs...";
+            allInputsHidden.Visible = trayAllInputsHidden.Visible = visibleCount == 0;
+            SizeInputButtons(mainInputs);
+        }
+        finally { mainInputs.ResumeLayout(performLayout: true); }
+        profileGrid.Rows.Clear();
+        foreach (var input in profile.Inputs)
+        {
+            int row = profileGrid.Rows.Add(input.Name, input.Value, input.Visible);
+            profileGrid.Rows[row].Tag = input.Id;
+        }
+        profileExplanation.Text = "Edit names, VCP 0x60 values (decimal or 0x hex), and Show for this monitor.\r\n" +
+            "Use the blank row to add inputs; select a row header and press Delete to remove it.\r\n" +
+            "Save monitor inputs applies all changes. Blank values disable switching. Saving does not send commands." +
+            (identity is null ? "\r\nNo unique monitor identity: these settings last only for this connection." : "");
+        UpdateControls();
+        SizeSettingsWindow();
+    }
+
+    private void BuildProfileEditor()
+    {
+        if (profileEditorReady)
+            return;
+        profileEditorReady = true;
+        var namesPage = settingsTabs.TabPages[1];
+        foreach (Control control in namesPage.Controls.Cast<Control>().ToArray())
+            control.Dispose();
+        var panel = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, RowCount = 3
+        };
+        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 180));
+        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        panel.Controls.Add(profileExplanation, 0, 0);
+        profileGrid.Columns.Add(new DataGridViewTextBoxColumn
+        {
+            Name = "InputName", HeaderText = "Input name", MaxInputLength = InputDisplayNames.MaximumLength
+        });
+        profileGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Value", HeaderText = "VCP 0x60 value" });
+        profileGrid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "ShowInput", HeaderText = "Show" });
+        profileGrid.DefaultValuesNeeded += (_, e) => e.Row.Cells[2].Value = true;
+        panel.Controls.Add(profileGrid, 0, 1);
+        var actions = MakeSettingsActions();
+        var saveProfile = MakeButton("Save monitor inputs");
+        saveProfile.Click += (_, _) => SaveMonitorProfile();
+        AddSettingsAction(actions, saveProfile, "Save names, visibility and values for this monitor. Does not switch inputs.");
+        if (legacyProfile is not null)
+        {
+            var import = MakeButton("Use previous settings");
+            import.Click += (_, _) => UseLegacyProfile(usePreset: false);
+            AddSettingsAction(actions, import,
+                "Import your previous configuration for this selected monitor only. Choose Save monitor inputs to keep it.");
+        }
+        var preset = MakeButton("Use working Odyssey values");
+        preset.Click += (_, _) => UseLegacyProfile(usePreset: true);
+        AddSettingsAction(actions, preset,
+            "Only for the tested Odyssey setup: fill DisplayPort 0x0F, HDMI 0x05 and Micro HDMI 0x06. Save to keep them.");
+        panel.Controls.Add(actions, 0, 2);
+        namesPage.Controls.Add(panel);
+        var technical = settingsTabs.TabPages[2].Controls.OfType<TabControl>().Single().TabPages[0];
+        foreach (Control control in technical.Controls.Cast<Control>().ToArray())
+            control.Dispose();
+        var guidance = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1 };
+        guidance.Controls.Add(new Label
+        {
+            Text = "Input names, values and visibility are configured together in Settings > Inputs...\r\n" +
+                "Capabilities may be incomplete or incorrect. Editing settings never sends input commands.",
+            AutoSize = true, Dock = DockStyle.Top
+        });
+        technical.Controls.Add(guidance);
+    }
+
+    private void UseLegacyProfile(bool usePreset)
+    {
+        if (SelectedMonitor is null || SelectedMonitor != profileMonitor || busy || exiting)
+            return;
+        var profile = usePreset
+            ? MonitorProfiles.FromLegacy(InputSettings.Resolve(null), InputDisplayNames.Resolve(null),
+                InputVisibility.Resolve(null))
+            : legacyProfile ?? throw new InvalidOperationException("No previous input configuration is available.");
+        RenderMonitorProfile(profile, profileIdentity, profileMonitor);
+        SetStatus("Configuration imported for this monitor. Choose Save monitor inputs to keep it.");
+    }
+
+    internal void SaveMonitorProfile(string? path = null)
+    {
+        try
+        {
+            if (activeProfile is null || busy || confirming || exiting || SelectedMonitor is null ||
+                SelectedMonitor != profileMonitor)
+                throw new InvalidOperationException("Select a connected monitor before saving inputs.");
+            if (!profileGrid.EndEdit())
+                throw new InvalidOperationException("Finish editing the input configuration before saving.");
+            var edited = new MonitorProfile();
+            foreach (DataGridViewRow row in profileGrid.Rows)
+            {
+                if (row.IsNewRow)
+                    continue;
+                edited.Inputs.Add(new MonitorInput
+                {
+                    Id = row.Tag as string ?? Guid.NewGuid().ToString("N"),
+                    Name = Convert.ToString(row.Cells[0].Value)?.Trim() ?? "",
+                    Value = Convert.ToString(row.Cells[1].Value)?.Trim() ?? "",
+                    Visible = row.Cells[2].Value is not bool show || show
+                });
+            }
+            MonitorProfiles.Validate(edited);
+            if (profileIdentity is not null)
+            {
+                if (!profileStoreAvailable)
+                    throw new InvalidOperationException(
+                        "Saved monitor profiles could not be loaded. Repair or back up monitor-profiles.json before saving.");
+                var updated = new Dictionary<string, MonitorProfile>(profiles, StringComparer.OrdinalIgnoreCase)
+                {
+                    [profileIdentity] = edited
+                };
+                WriteSettings(path ?? ProfilesPath, updated);
+                profiles = updated;
+            }
+            RenderMonitorProfile(edited, profileIdentity, profileMonitor);
+            SetStatus(profileIdentity is null
+                ? "Input configuration applied for this connection only; no unique monitor identity is available."
+                : "Monitor inputs saved.");
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            ReportSettingsFailure(error);
+        }
     }
 
     private Task DiagnosticsAsync()
@@ -1111,7 +1421,8 @@ internal sealed class MainForm : Form
     {
         NativeMonitor? selected = SelectedMonitor;
         if (!visibleInputs[index] || busy || confirming || exiting || selected is null ||
-            !InputValue.TryParse(values[index].Text, out uint value))
+            !InputValue.TryParse(ConfiguredValue(index), out uint value) ||
+            (activeProfile is not null && profileMonitor != selected))
             return;
         int generation = displayGeneration;
         DialogResult answer;
@@ -1340,11 +1651,16 @@ internal sealed class MainForm : Form
             trayInputs[i].Text = displayNames[i].Replace("&", "&&");
             trayInputs[i].AccessibleName = "Switch to " + displayNames[i];
         }
-        SizeInputButtons((TableLayoutPanel)switches[0].Parent!);
+        SizeInputButtons(mainInputs);
     }
 
     internal void SaveInputNames(string path)
     {
+        if (activeProfile is not null)
+        {
+            SaveMonitorProfile();
+            return;
+        }
         try
         {
             var edited = new Dictionary<string, string?>();
@@ -1382,7 +1698,7 @@ internal sealed class MainForm : Form
 
     private void ApplyInputVisibility(Dictionary<string, bool> visibility)
     {
-        var inputs = (TableLayoutPanel)switches[0].Parent!;
+        var inputs = mainInputs;
         inputs.SuspendLayout();
         try
         {
@@ -1407,6 +1723,11 @@ internal sealed class MainForm : Form
 
     internal void SaveInputVisibility(string path)
     {
+        if (activeProfile is not null)
+        {
+            SaveMonitorProfile();
+            return;
+        }
         try
         {
             var visibility = new Dictionary<string, bool>();
@@ -1499,6 +1820,11 @@ internal sealed class MainForm : Form
 
     private void SaveSettings()
     {
+        if (activeProfile is not null)
+        {
+            SaveMonitorProfile();
+            return;
+        }
         try
         {
             var stored = new Dictionary<string, string>();
