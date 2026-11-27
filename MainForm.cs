@@ -64,6 +64,10 @@ internal sealed class MainForm : Form
     private readonly NotifyIcon tray = new();
     private readonly ContextMenuStrip trayMenu = new();
     private readonly System.Windows.Forms.Timer refreshTimer = new() { Interval = 650 };
+    private readonly System.Windows.Forms.Timer updateTimer = new() { Interval = 60_000 };
+    private readonly UpdateCheckSchedule updateSchedule;
+    private readonly Func<ReleaseUpdater> createUpdater;
+    private bool checkingForUpdates;
     private readonly Form advanced = new();
     private MonitorInventory? inventory;
     private Preferences preferences = new();
@@ -88,9 +92,12 @@ internal sealed class MainForm : Form
     private NativeMonitor? SelectedMonitor => !stale ? monitors.SelectedItem as NativeMonitor : null;
     internal event EventHandler? InitializationCompleted;
 
-    internal MainForm(bool startInTray = false)
+    internal MainForm(bool startInTray = false, TimeProvider? clock = null,
+        Func<ReleaseUpdater>? updaterFactory = null)
     {
         this.startInTray = startInTray;
+        updateSchedule = new UpdateCheckSchedule(clock ?? TimeProvider.System);
+        createUpdater = updaterFactory ?? (() => new ReleaseUpdater());
         Text = "Odyssey Input Switcher";
         StartPosition = FormStartPosition.CenterScreen;
         AutoScaleMode = AutoScaleMode.Dpi;
@@ -142,6 +149,7 @@ internal sealed class MainForm : Form
             refreshPending = false;
             await RefreshAsync();
         };
+        updateTimer.Tick += async (_, _) => await CheckForUpdatesIfDueAsync();
         Resize += (_, _) =>
         {
             if (WindowState == FormWindowState.Minimized)
@@ -205,6 +213,7 @@ internal sealed class MainForm : Form
             LoadPreferences();
             RefreshStartupSetting();
             InitializationCompleted?.Invoke(this, EventArgs.Empty);
+            updateTimer.Start();
             await CheckForUpdatesAsync(manual: false);
             QueueRefresh("Startup");
         });
@@ -592,6 +601,7 @@ internal sealed class MainForm : Form
     {
         exiting = true;
         updateCancellation.Cancel();
+        updateTimer.Stop();
         refreshTimer.Stop();
         refreshPending = false;
         Close();
@@ -605,7 +615,7 @@ internal sealed class MainForm : Form
         bool selected = !busy && !confirming && !exiting && monitor is not null;
         monitors.Enabled = !busy && !stale;
         refresh.Enabled = !busy && !exiting;
-        settingsUpdate.Enabled = !busy && !confirming && !exiting;
+        settingsUpdate.Enabled = !busy && !confirming && !exiting && !checkingForUpdates;
         startupItem.Enabled = !busy && !exiting;
         diagnostics.Enabled = selected;
         save.Enabled = restore.Enabled = !busy && !exiting;
@@ -640,11 +650,73 @@ internal sealed class MainForm : Form
     private string?[] CurrentIdentities() =>
         inventory?.Monitors.Select(monitor => monitor.StableId).ToArray() ?? [];
 
-    private async Task CheckForUpdatesAsync(bool manual)
+    internal async Task CheckForUpdatesIfDueAsync()
     {
-        if (busy || confirming || exiting)
+        if (busy || confirming || exiting || checkingForUpdates || !updateSchedule.IsDue)
             return;
-        await RunAsync(async () =>
+        checkingForUpdates = true;
+        updateSchedule.CheckStarted();
+        UpdateControls();
+        try
+        {
+            using var updater = createUpdater();
+            var update = await updater.CheckAsync(updateCancellation.Token);
+            if (!exiting)
+            {
+                if (update is not null)
+                    NotifyUpdateAvailable(update);
+                else
+                    Append($"No newer stable release. Installed version: {ReleaseUpdater.CurrentVersion}.");
+            }
+        }
+        catch (OperationCanceledException) when (updateCancellation.IsCancellationRequested)
+        {
+            if (!resourcesDisposed)
+                Append("Update canceled because the app is exiting.");
+        }
+        catch (Exception error)
+        {
+            if (!resourcesDisposed)
+            {
+                Append("Automatic update check failed: " + error);
+                if (!exiting)
+                    tray.ShowBalloonTip(5000, "Update check failed",
+                        error.Message + " Use Check for updates to retry.", ToolTipIcon.Warning);
+            }
+        }
+        finally
+        {
+            checkingForUpdates = false;
+            UpdateControls();
+        }
+    }
+
+    private void NotifyUpdateAvailable(ReleaseUpdate update)
+    {
+        Append($"Version {update.Version} is available. Open Settings > Check for updates to upgrade.");
+        tray.ShowBalloonTip(5000, "Odyssey update available",
+            $"Version {update.Version} is available. Open Settings > Check for updates.", ToolTipIcon.Info);
+    }
+
+    internal async Task CheckForUpdatesAsync(bool manual)
+    {
+        if (busy || confirming || exiting || checkingForUpdates)
+            return;
+        checkingForUpdates = true;
+        updateSchedule.CheckStarted();
+        try
+        {
+            await PerformUpdateCheckAsync(manual);
+        }
+        finally
+        {
+            checkingForUpdates = false;
+            UpdateControls();
+        }
+    }
+
+    private Task PerformUpdateCheckAsync(bool manual) =>
+        RunAsync(async () =>
         {
             string? stagedDirectory = null;
             bool installerStarted = false;
@@ -652,7 +724,7 @@ internal sealed class MainForm : Form
             try
             {
                 SetStatus("Checking for updates...");
-                using var updater = new ReleaseUpdater();
+                using var updater = createUpdater();
                 var update = await updater.CheckAsync(updateCancellation.Token);
                 if (exiting)
                     return;
@@ -667,9 +739,7 @@ internal sealed class MainForm : Form
                 }
                 if (startInTray && !manual)
                 {
-                    Append($"Version {update.Version} is available. Open Settings > Check for updates to upgrade.");
-                    tray.ShowBalloonTip(5000, "Odyssey update available",
-                        $"Version {update.Version} is available. Open Settings > Check for updates.", ToolTipIcon.Info);
+                    NotifyUpdateAvailable(update);
                     return;
                 }
                 ShowMainWindow();
@@ -728,7 +798,6 @@ internal sealed class MainForm : Form
                 }
             }
         });
-    }
 
     private void Append(string message) => log.AppendText($"[{DateTime.Now:HH:mm:ss}] {message}\r\n");
     private void SetStatus(string message)
@@ -1308,6 +1377,7 @@ internal sealed class MainForm : Form
             updateCancellation.Cancel();
             updateCancellation.Dispose();
             refreshTimer.Dispose();
+            updateTimer.Dispose();
             ReleaseInventory(logMessages: false);
             tray.Visible = false;
             tray.Dispose();
