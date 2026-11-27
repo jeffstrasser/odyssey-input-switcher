@@ -41,6 +41,8 @@ void Check(bool passed, string description)
     if (!passed)
         throw new Exception("FAIL: " + description);
 }
+if (args.Contains("--daily-updates-only"))
+    goto UiTests;
 foreach (var (text, expected) in new (string, uint)[]
 {
     ("17", 17), (" 0x11 ", 17), ("0XFFFF", 65535), ("65535", 65535), ("0", 0)
@@ -378,6 +380,7 @@ try
     finally { File.Delete(crashTarget); }
 }
 finally { Directory.Delete(testDirectory, recursive: true); }
+UiTests:
 Exception? layoutError = null;
 var layoutThread = new Thread(() =>
 {
@@ -385,6 +388,96 @@ var layoutThread = new Thread(() =>
     {
         Application.SetHighDpiMode(args.Contains("--dpi-unaware")
             ? HighDpiMode.DpiUnaware : HighDpiMode.PerMonitorV2);
+        var updateClock = new ManualTimeProvider(new DateTimeOffset(2030, 1, 1, 0, 0, 0, TimeSpan.Zero));
+        var schedule = new UpdateCheckSchedule(updateClock);
+        Check(schedule.IsDue, "Startup update check is initially due");
+        schedule.CheckStarted();
+        updateClock.Advance(TimeSpan.FromHours(24) - TimeSpan.FromTicks(1));
+        Check(!schedule.IsDue, "Daily check does not run before exactly 24 hours");
+        updateClock.Advance(TimeSpan.FromTicks(1));
+        Check(schedule.IsDue, "Daily check becomes due at the 24-hour boundary");
+        schedule.CheckStarted();
+        updateClock.Advance(TimeSpan.FromDays(4));
+        Check(schedule.IsDue, "A check missed during sleep is due on resume");
+        schedule.CheckStarted();
+        Check(!schedule.IsDue, "Resumed checks start a fresh interval instead of catching up in a burst");
+        string runtime = RuntimeInformation.ProcessArchitecture == Architecture.Arm64 ? "win-arm64" : "win-x64";
+        Action<CancellationToken>? duringRequest = null;
+        bool failUpdate = false;
+        using var updateHandler = new CallbackReleaseHandler((request, token) =>
+        {
+            Check(request.RequestUri!.AbsolutePath.EndsWith("/releases/latest"),
+                "Daily checks fetch metadata only, never download an update");
+            duringRequest?.Invoke(token);
+            return new HttpResponseMessage(failUpdate ? System.Net.HttpStatusCode.BadGateway : System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(ReleaseJson("v99.0.0", runtime: runtime))
+            };
+        });
+        using (var daily = new MainForm(startInTray: true, clock: updateClock,
+            updaterFactory: () => new ReleaseUpdater(new HttpClient(updateHandler, disposeHandler: false))))
+        {
+            var fields = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+            var state = typeof(MainForm).GetMethod("SetStatus", fields)!;
+            var message = (Label)typeof(MainForm).GetField("status", fields)!.GetValue(daily)!;
+            var updateItem = (ToolStripMenuItem)typeof(MainForm).GetField("settingsUpdate", fields)!.GetValue(daily)!;
+            var refreshButton = (Button)typeof(MainForm).GetField("refresh", fields)!.GetValue(daily)!;
+            daily.CheckForUpdatesAsync(manual: false).GetAwaiter().GetResult();
+            Check(updateHandler.Requests == 1 && !daily.Visible && !daily.IsHandleCreated,
+                "Startup checking remains supported in tray mode");
+            state.Invoke(daily, ["Monitor operation status"]);
+            updateClock.Advance(TimeSpan.FromHours(24) - TimeSpan.FromTicks(1));
+            daily.CheckForUpdatesIfDueAsync().GetAwaiter().GetResult();
+            Check(updateHandler.Requests == 1, "Timer polling does not request metadata before the deadline");
+            updateClock.Advance(TimeSpan.FromTicks(1));
+            typeof(MainForm).GetField("busy", fields)!.SetValue(daily, true);
+            daily.CheckForUpdatesIfDueAsync().GetAwaiter().GetResult();
+            Check(updateHandler.Requests == 1, "Due checks defer while a monitor operation is busy");
+            typeof(MainForm).GetField("busy", fields)!.SetValue(daily, false);
+            typeof(MainForm).GetField("confirming", fields)!.SetValue(daily, true);
+            daily.CheckForUpdatesIfDueAsync().GetAwaiter().GetResult();
+            Check(updateHandler.Requests == 1, "Due checks defer while an input confirmation is active");
+            typeof(MainForm).GetField("confirming", fields)!.SetValue(daily, false);
+            duringRequest = _ =>
+            {
+                Check(!updateItem.Enabled && refreshButton.Enabled &&
+                    !(bool)typeof(MainForm).GetField("busy", fields)!.GetValue(daily)!,
+                    "Background requests disable overlapping update checks but not monitor controls");
+                bool operationRan = false;
+                var operation = (Task)typeof(MainForm).GetMethod("RunAsync", fields)!.Invoke(daily,
+                    [(Func<Task>)(() => { operationRan = true; return Task.CompletedTask; }), false])!;
+                operation.GetAwaiter().GetResult();
+                Check(operationRan, "Monitor operations can run during a daily metadata request");
+                daily.CheckForUpdatesAsync(manual: true).GetAwaiter().GetResult();
+                updateClock.Advance(TimeSpan.FromHours(24));
+                daily.CheckForUpdatesIfDueAsync().GetAwaiter().GetResult();
+                updateClock.Advance(-TimeSpan.FromHours(24));
+            };
+            daily.CheckForUpdatesIfDueAsync().GetAwaiter().GetResult();
+            Check(updateHandler.Requests == 2 && updateItem.Enabled,
+                "Deferred daily checks run when idle and overlapping checks are suppressed");
+            Check(!daily.Visible && !daily.IsHandleCreated && message.Text == "Monitor operation status",
+                "Daily update offers preserve tray-only operation and monitor status");
+            duringRequest = null;
+            updateClock.Advance(TimeSpan.FromDays(3));
+            failUpdate = true;
+            daily.CheckForUpdatesIfDueAsync().GetAwaiter().GetResult();
+            var diagnosticLog = (TextBox)typeof(MainForm).GetField("log", fields)!.GetValue(daily)!;
+            Check(updateHandler.Requests == 3 && diagnosticLog.Text.Contains("Automatic update check failed") &&
+                updateItem.Enabled && message.Text == "Monitor operation status",
+                "Network failures are reported without blocking controls or overwriting monitor status");
+            daily.CheckForUpdatesIfDueAsync().GetAwaiter().GetResult();
+            Check(updateHandler.Requests == 3, "Failed checks do not cause a request burst on every timer tick");
+            updateClock.Advance(TimeSpan.FromHours(24));
+            failUpdate = false;
+            duringRequest = token => { daily.Dispose(); token.ThrowIfCancellationRequested(); };
+            daily.CheckForUpdatesIfDueAsync().GetAwaiter().GetResult();
+            daily.CheckForUpdatesIfDueAsync().GetAwaiter().GetResult();
+            Check(daily.IsDisposed && updateHandler.Requests == 4,
+                "Shutdown cancels background requests and prevents further checks without accessing disposed UI");
+        }
+        if (args.Contains("--daily-updates-only"))
+            return;
         using (var hidden = new MainForm(startInTray: true))
         {
             hidden.Show();
@@ -671,6 +764,24 @@ internal sealed class ArchiveHandler(byte[] bytes) : HttpMessageHandler
         {
             Content = new ByteArrayContent(bytes)
         });
+    }
+}
+
+internal sealed class ManualTimeProvider(DateTimeOffset now) : TimeProvider
+{
+    private DateTimeOffset current = now;
+    public override DateTimeOffset GetUtcNow() => current;
+    internal void Advance(TimeSpan elapsed) => current += elapsed;
+}
+
+internal sealed class CallbackReleaseHandler(
+    Func<HttpRequestMessage, CancellationToken, HttpResponseMessage> respond) : HttpMessageHandler
+{
+    internal int Requests;
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        Requests++;
+        return Task.FromResult(respond(request, cancellationToken));
     }
 }
 
