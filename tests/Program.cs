@@ -41,7 +41,7 @@ void Check(bool passed, string description)
     if (!passed)
         throw new Exception("FAIL: " + description);
 }
-if (args.Contains("--daily-updates-only"))
+if (args.Contains("--daily-updates-only") || args.Contains("--layout-only"))
     goto UiTests;
 foreach (var (text, expected) in new (string, uint)[]
 {
@@ -386,6 +386,12 @@ var layoutThread = new Thread(() =>
 {
     try
     {
+        Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+        Application.ThreadException += (_, e) =>
+        {
+            Console.Error.WriteLine(e.Exception);
+            Environment.Exit(1);
+        };
         Application.SetHighDpiMode(args.Contains("--dpi-unaware")
             ? HighDpiMode.DpiUnaware : HighDpiMode.PerMonitorV2);
         var updateClock = new ManualTimeProvider(new DateTimeOffset(2030, 1, 1, 0, 0, 0, TimeSpan.Zero));
@@ -510,6 +516,8 @@ var layoutThread = new Thread(() =>
             exit.PerformClick();
             Check(waiting.IsDisposed, $"Settings Exit completes once {pendingOperation} is cleared");
         }
+        // Forms must be disposed before the shared font used during their paint/teardown.
+        using var originalFont = new System.Drawing.Font("Segoe UI", 9);
         using var main = new MainForm();
         var menu = main.MainMenuStrip ?? throw new Exception("Standard menu bar is missing.");
         var settingsMenu = (ToolStripMenuItem)menu.Items[0];
@@ -518,7 +526,7 @@ var layoutThread = new Thread(() =>
             .Select(item => item.Text).SequenceEqual(expectedMenu),
             "Standard Settings menu exposes preferences, logging, updates, About and Exit with keyboard mnemonics");
         var mainLayout = main.Controls.OfType<TableLayoutPanel>().Single();
-        var footer = (FlowLayoutPanel)mainLayout.GetControlFromPosition(0, 7)!;
+        var footer = (FlowLayoutPanel)mainLayout.GetControlFromPosition(0, 5)!;
         Check(footer.Controls.OfType<Button>().Select(button => button.Text).SequenceEqual(["Run in tray"]),
             "Footer retains Run in tray but no Settings button");
         var trayMenu = (ContextMenuStrip)typeof(MainForm).GetField("trayMenu",
@@ -548,13 +556,24 @@ var layoutThread = new Thread(() =>
         var generalPanel = settingsTabs.TabPages[0].Controls.OfType<TableLayoutPanel>().Single();
         Check(generalPanel.Controls.OfType<CheckBox>().Select(control => control.Text)
             .SequenceEqual(["Run at Windows startup", "Ask before switching inputs"]) &&
-            generalPanel.Controls.OfType<FlowLayoutPanel>().Single().Controls.OfType<Button>()
+            generalPanel.Controls.OfType<TableLayoutPanel>().Single().Controls.OfType<Button>()
                 .Select(button => button.Text).SequenceEqual(["Save selected monitor as default", "Clear default monitor"]),
             "General groups startup, confirmation, and both default-monitor actions");
         var technicalTabs = settingsTabs.TabPages[2].Controls.OfType<TabControl>().Single();
         Check(technicalTabs.TabPages.Cast<TabPage>().Select(tab => tab.Text)
             .SequenceEqual(["Input values", "Diagnostics"]),
             "Advanced keeps VCP editing separate from diagnostic reads");
+        IEnumerable<Control> Descendants(Control parent) =>
+            parent.Controls.Cast<Control>().SelectMany(child => new[] { child }.Concat(Descendants(child)));
+        var help = (ToolTip)typeof(MainForm).GetField("buttonHelp",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(main)!;
+        Check(Descendants(main).Concat(Descendants(advanced)).OfType<Button>().All(button =>
+            !string.IsNullOrWhiteSpace(button.AccessibleDescription) &&
+            help.GetToolTip(button) == button.AccessibleDescription),
+            "Every main and settings button has accessible hover help");
+        Check(Descendants(advanced).OfType<Button>().All(button =>
+            button.Parent!.Controls.OfType<Label>().Any(label => label.Text == button.AccessibleDescription)),
+            "Every settings button has an always-visible description");
         var nameFields = (TextBox[])typeof(MainForm).GetField("nameFields",
             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(main)!;
         var switches = (Button[])typeof(MainForm).GetField("switches",
@@ -572,6 +591,14 @@ var layoutThread = new Thread(() =>
         }
         Check(inputValues.Select(field => field.Text).SequenceEqual(valuesBeforeNavigation),
             "Opening settings from the main menu preserves staged VCP values");
+        main.Show();
+        main.PerformLayout();
+        Check(main.ClientSize.Width <= 460 * main.DeviceDpi / 96d &&
+            main.ClientSize.Height <= 300 * main.DeviceDpi / 96d,
+            $"Default main window stays compact (client={main.ClientSize}, DPI={main.DeviceDpi})");
+        Check(advanced.ClientSize.Width == Math.Ceiling(650 * advanced.DeviceDpi / 96d) &&
+            advanced.ClientSize.Height <= 600 * advanced.DeviceDpi / 96d,
+            $"Settings initially fits a DPI-scaled compact window (client={advanced.ClientSize}, DPI={advanced.DeviceDpi})");
         inputValues[1].Text = "0x1234";
         string[] originalValues = inputValues.Select(field => field.Text).ToArray();
         string namesDirectory = Path.Combine(AppContext.BaseDirectory, "names-test-" + Guid.NewGuid().ToString("N"));
@@ -603,7 +630,7 @@ var layoutThread = new Thread(() =>
             }
             var tabs = advanced.Controls.OfType<TabControl>().Single();
             var namesLayout = (TableLayoutPanel)tabs.TabPages[1].Controls[0];
-            var actions = (FlowLayoutPanel)namesLayout.GetControlFromPosition(0, 4)!;
+            var actions = (TableLayoutPanel)namesLayout.GetControlFromPosition(0, 4)!;
             var restoreNames = actions.Controls.OfType<Button>().Single(button => button.Text == "Restore default names");
             typeof(Button).GetMethod("OnClick",
                 System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.Invoke(restoreNames, [EventArgs.Empty]);
@@ -630,7 +657,6 @@ var layoutThread = new Thread(() =>
         string visibilityDirectory = Path.Combine(AppContext.BaseDirectory, "visibility-test-" + Guid.NewGuid().ToString("N"));
         string visibilityPath = Path.Combine(visibilityDirectory, "input-visibility.json");
         string combinedNamesPath = Path.Combine(visibilityDirectory, "input-names.json");
-        using var originalFont = (System.Drawing.Font)main.Font.Clone();
         main.Show();
         try
         {
@@ -707,138 +733,173 @@ var layoutThread = new Thread(() =>
         }
         typeof(MainForm).GetMethod("SetStatus",
             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.Invoke(main, [""]);
+        main.Show();
         foreach (float size in new[] { 10f, 16f, 24f, 10f })
         {
             using var font = new System.Drawing.Font("Segoe UI", size);
-            main.Font = font;
-            _ = main.Handle;
-            typeof(MainForm).GetMethod("SetScaledMinimumSize",
-                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.Invoke(main, null);
-            main.PerformLayout();
-            var mainContent = mainLayout;
-            mainContent.PerformLayout();
-            Check(menu.Bottom <= mainContent.Top,
-                $"Top menu does not overlap main content at {size}pt");
-            Check(menu.Font.Size == main.Font.Size,
-                $"Menu follows the main window font at {size}pt");
-            advanced.Font = font;
-            var namesTabs = advanced.Controls.OfType<TabControl>().Single();
-            namesTabs.SelectedIndex = 1;
-            _ = advanced.Handle;
-            _ = namesTabs.Handle;
-            _ = namesTabs.TabPages[1].Handle;
-            advanced.PerformAutoScale();
-            advanced.PerformLayout();
-            namesTabs.PerformLayout();
-            namesTabs.TabPages[1].PerformLayout();
-            var namesPanel = (TableLayoutPanel)namesTabs.TabPages[1].Controls[0];
-            namesPanel.PerformLayout();
-            Check(nameFields.All(field => field.Width > 0 && field.Right <= namesPanel.ClientSize.Width) &&
-                visibilityFields.All(field => field.Right <= namesPanel.ClientSize.Width &&
-                    field.Height >= field.GetPreferredSize(System.Drawing.Size.Empty).Height) &&
-                namesPanel.Controls.OfType<Label>().All(label => label.Right <= namesPanel.ClientSize.Width),
-                $"Custom-name settings fit or scroll without clipping at {size}pt " +
-                $"(panel={namesPanel.ClientSize}, labels={string.Join("; ", namesPanel.Controls.OfType<Label>().Select(label => label.Bounds))})");
-            foreach (var page in new[] { settingsTabs.TabPages[0], settingsTabs.TabPages[1], technicalTabs.TabPages[0] })
+            try
             {
-                settingsTabs.SelectedIndex = settingsTabs.TabPages.Contains(page)
-                    ? settingsTabs.TabPages.IndexOf(page) : 2;
-                technicalTabs.SelectedIndex = 0;
-                _ = page.Handle;
+                main.Font = font;
+                _ = main.Handle;
+                typeof(MainForm).GetMethod("SetScaledMinimumSize",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.Invoke(main, null);
+                main.PerformLayout();
+                var mainContent = mainLayout;
+                mainContent.PerformLayout();
+                Check(menu.Bottom <= mainContent.Top,
+                    $"Top menu does not overlap main content at {size}pt");
+                Check(menu.Font.Size == main.Font.Size,
+                    $"Menu follows the main window font at {size}pt");
+                advanced.Font = font;
+                var namesTabs = advanced.Controls.OfType<TabControl>().Single();
+                namesTabs.SelectedIndex = 1;
+                _ = advanced.Handle;
+                _ = namesTabs.Handle;
+                _ = namesTabs.TabPages[1].Handle;
+                advanced.PerformAutoScale();
                 advanced.PerformLayout();
-                settingsTabs.PerformLayout();
-                technicalTabs.PerformLayout();
-                page.PerformLayout();
-                var panel = page.Controls.OfType<TableLayoutPanel>().Single();
-                panel.PerformLayout();
-                foreach (var flow in panel.Controls.OfType<FlowLayoutPanel>())
-                    flow.PerformLayout();
-                Check(panel.Controls.Cast<Control>().All(control =>
-                    control.Right <= panel.ClientSize.Width &&
-                    (control is not Label && control is not CheckBox ||
-                        control.Height >= control.GetPreferredSize(new System.Drawing.Size(control.Width, 0)).Height)) &&
-                    panel.Controls.OfType<FlowLayoutPanel>().SelectMany(flow => flow.Controls.Cast<Control>())
-                        .All(control => control.Right <= control.Parent!.ClientSize.Width &&
-                            control.Bottom <= control.Parent.ClientSize.Height &&
-                            control.Height >= control.GetPreferredSize(new System.Drawing.Size(control.Width, 0)).Height) &&
-                    panel.Top >= page.Padding.Top &&
-                    (advanced.Height >= Screen.FromControl(advanced).WorkingArea.Height ||
-                        (panel.Bottom + page.Padding.Bottom <= page.ClientSize.Height &&
-                            !page.VerticalScroll.Visible && !page.HorizontalScroll.Visible)),
-                    $"{page.Text} preferences and Save actions fit without scrolling unless screen-limited at {size}pt " +
-                    $"(page={page.ClientSize}, panel={panel.Bounds}, scroll={page.VerticalScroll.Visible}, " +
-                    $"controls={string.Join("; ", panel.Controls.Cast<Control>().Select(control => $"{control.Text}: {control.Bounds}, preferred={control.GetPreferredSize(new System.Drawing.Size(control.Width, 0))}"))}, " +
-                    $"buttons={string.Join("; ", panel.Controls.OfType<FlowLayoutPanel>().SelectMany(flow => flow.Controls.Cast<Control>()).Select(control => $"{control.Text}: {control.Bounds}, parent={control.Parent!.ClientSize}"))})");
+                namesTabs.PerformLayout();
+                namesTabs.TabPages[1].PerformLayout();
+                var namesPanel = (TableLayoutPanel)namesTabs.TabPages[1].Controls[0];
+                namesPanel.PerformLayout();
+                typeof(MainForm).GetMethod("SizeSettingsWindow",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.Invoke(main, null);
+                Check(nameFields.All(field => field.Width > 0 && field.Right <= namesPanel.ClientSize.Width) &&
+                    visibilityFields.All(field => field.Right <= namesPanel.ClientSize.Width &&
+                        field.Height >= field.GetPreferredSize(System.Drawing.Size.Empty).Height) &&
+                    namesPanel.Controls.OfType<Label>().All(label => label.Right <= namesPanel.ClientSize.Width),
+                    $"Custom-name settings fit without clipping at {size}pt " +
+                    $"(panel={namesPanel.ClientSize}, labels={string.Join("; ", namesPanel.Controls.OfType<Label>().Select(label => label.Bounds))})");
+                foreach (var page in new[] { settingsTabs.TabPages[0], settingsTabs.TabPages[1],
+                technicalTabs.TabPages[0], technicalTabs.TabPages[1] })
+                {
+                    settingsTabs.SelectedIndex = settingsTabs.TabPages.Contains(page)
+                        ? settingsTabs.TabPages.IndexOf(page) : 2;
+                    technicalTabs.SelectedIndex = technicalTabs.TabPages.Contains(page)
+                        ? technicalTabs.TabPages.IndexOf(page) : 0;
+                    _ = page.Handle;
+                    advanced.PerformLayout();
+                    settingsTabs.PerformLayout();
+                    technicalTabs.PerformLayout();
+                    page.PerformLayout();
+                    typeof(MainForm).GetMethod("SizeSettingsWindow",
+                        System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.Invoke(main, null);
+                    var panel = page.Controls.OfType<TableLayoutPanel>().Single();
+                    panel.PerformLayout();
+                    foreach (var actions in panel.Controls.OfType<TableLayoutPanel>())
+                        actions.PerformLayout();
+                    Check(panel.Controls.Cast<Control>().All(control =>
+                        control.Right <= panel.ClientSize.Width &&
+                        (control is not Label && control is not CheckBox ||
+                            control.Height >= control.GetPreferredSize(new System.Drawing.Size(control.Width, 0)).Height)) &&
+                        panel.Controls.OfType<TableLayoutPanel>().SelectMany(actions => actions.Controls.Cast<Control>())
+                            .All(control => control.Right <= control.Parent!.ClientSize.Width &&
+                                control.Bottom <= control.Parent.ClientSize.Height &&
+                                control.Height >= control.GetPreferredSize(new System.Drawing.Size(control.Width, 0)).Height) &&
+                        panel.Top >= page.Padding.Top &&
+                        (panel.Bottom <= page.ClientSize.Height - page.Padding.Bottom &&
+                            !page.AutoScroll && !page.VerticalScroll.Visible && !page.HorizontalScroll.Visible ||
+                            advanced.Height == Screen.FromControl(advanced).WorkingArea.Height &&
+                            panel.GetPreferredSize(new System.Drawing.Size(panel.Width, 0)).Height +
+                                page.Padding.Vertical > page.ClientSize.Height &&
+                            page.AutoScroll && page.VerticalScroll.Visible),
+                        $"{page.Text} preferences, descriptions, and actions fit without scrolling at {size}pt " +
+                        $"(page={page.ClientSize}, panel={panel.Bounds}, scroll={page.VerticalScroll.Visible}, " +
+                        $"controls={string.Join("; ", panel.Controls.Cast<Control>().Select(control => $"{control.Text}: {control.Bounds}, preferred={control.GetPreferredSize(new System.Drawing.Size(control.Width, 0))}"))}, " +
+                        $"buttons={string.Join("; ", panel.Controls.OfType<TableLayoutPanel>().SelectMany(actions => actions.Controls.Cast<Control>()).Select(control => $"{control.Text}: {control.Bounds}, parent={control.Parent!.ClientSize}"))})");
+                }
+                technicalTabs.SelectedIndex = 1;
+                var diagnosticPage = technicalTabs.SelectedTab!;
+                diagnosticPage.PerformLayout();
+                var diagnosticPanel = diagnosticPage.Controls.OfType<TableLayoutPanel>().Single();
+                diagnosticPanel.PerformLayout();
+                Check((!diagnosticPage.VerticalScroll.Visible && !diagnosticPage.HorizontalScroll.Visible ||
+                    advanced.Height == Screen.FromControl(advanced).WorkingArea.Height &&
+                    diagnosticPanel.GetPreferredSize(new System.Drawing.Size(diagnosticPanel.Width, 0)).Height +
+                        diagnosticPage.Padding.Vertical > diagnosticPage.ClientSize.Height &&
+                    diagnosticPage.AutoScroll && diagnosticPage.VerticalScroll.Visible) &&
+                    diagnosticPanel.Controls.Cast<Control>().All(control =>
+                        control.Right <= diagnosticPanel.ClientSize.Width &&
+                        control.Bottom <= diagnosticPanel.ClientSize.Height) &&
+                    advanced.Width <= Screen.FromControl(advanced).WorkingArea.Width &&
+                    advanced.Height <= Screen.FromControl(advanced).WorkingArea.Height,
+                    $"Diagnostics controls fit and settings stay within the screen at {size}pt " +
+                    $"(window={advanced.Size}, area={Screen.FromControl(advanced).WorkingArea}, " +
+                    $"panel={diagnosticPanel.ClientSize}, controls={string.Join("; ", diagnosticPanel.Controls.Cast<Control>().Select(control => control.Bounds))})");
+                Check(main.Width >= main.MinimumSize.Width && main.ClientSize.Width >= 440 * main.DeviceDpi / 96d,
+                    $"Content sizing preserves the designed minimum window width at {size}pt " +
+                    $"(width={main.Width}, minimum={main.MinimumSize}, client={main.ClientSize}, DPI={main.DeviceDpi})");
+                Check(mainContent.Bottom <= main.ClientSize.Height || main.VerticalScroll.Visible,
+                    $"Fixed main window fits content or allows scrolling at {size}pt");
+                Check(mainContent.Controls.Cast<Control>().Where(control => control.Visible).All(control =>
+                    control.Right <= mainContent.ClientSize.Width - mainContent.Padding.Right),
+                    $"Compact main rows stay within the window width at {size}pt");
+                Check(main.ClientSize.Height - mainContent.Bottom <= 1,
+                    $"Main window has no unused height below its content at {size}pt");
+                foreach (var button in switches)
+                {
+                    var required = TextRenderer.MeasureText(button.Text, button.Font,
+                        new System.Drawing.Size(Math.Max(1, button.Width - button.Padding.Horizontal - 8), int.MaxValue),
+                        TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl | TextFormatFlags.NoPrefix);
+                    Check(button.Height >= required.Height + button.Padding.Vertical &&
+                        button.Right <= button.Parent!.ClientSize.Width && button.Bottom <= button.Parent.ClientSize.Height,
+                        $"Maximum-length custom button names wrap without clipping at {size}pt");
+                }
+                int compactHeight = main.ClientSize.Height;
+                string compactLayout = $"client={main.ClientSize}, content={mainContent.Bounds}, " +
+                    $"rows={string.Join(",", mainContent.GetRowHeights())}, inputs={inputPanel.Bounds}, " +
+                    $"scroll={main.VerticalScroll.Visible}";
+                var setStatus = typeof(MainForm).GetMethod("SetStatus",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+                setStatus.Invoke(main, ["Downloading and verifying the update. Please wait for this operation to finish."]);
+                main.PerformLayout();
+                Check((main.ClientSize.Height > compactHeight || main.VerticalScroll.Visible) &&
+                    (mainContent.Bottom <= main.ClientSize.Height || main.VerticalScroll.Visible),
+                    $"Status messages expand the compact window without clipping at {size}pt");
+                setStatus.Invoke(main, [""]);
+                main.PerformLayout();
+                Check(main.ClientSize.Height == compactHeight,
+                    $"Clearing status restores compact height at {size}pt " +
+                    $"(before={compactLayout}, after={main.ClientSize}, content={mainContent.Bounds}, " +
+                    $"rows={string.Join(",", mainContent.GetRowHeights())}, inputs={inputPanel.Bounds}, scroll={main.VerticalScroll.Visible})");
+                foreach (var button in Descendants(main).OfType<Button>().Where(button => button.Visible))
+                {
+                    using var bitmap = new System.Drawing.Bitmap(button.Width, button.Height);
+                    button.DrawToBitmap(bitmap, new System.Drawing.Rectangle(System.Drawing.Point.Empty, bitmap.Size));
+                }
+                var (dialog, suppress) = main.CreateInputConfirmation(
+                    "Samsung Odyssey OLED G9 - a long monitor description", 0, 15);
+                using (dialog)
+                {
+                    // Create handles and lay out without showing the dialog or discovering monitors.
+                    _ = dialog.Handle;
+                    dialog.PerformAutoScale();
+                    dialog.PerformLayout();
+                    var content = (TableLayoutPanel)dialog.Controls[0];
+                    content.PerformLayout();
+                    var warning = (Label)content.GetControlFromPosition(0, 1)!;
+                    var heading = (Label)content.GetControlFromPosition(0, 0)!;
+                    Check(heading.Text == $"Switch to {labels[0]}?" && !heading.UseMnemonic &&
+                        heading.Height >= heading.GetPreferredSize(new System.Drawing.Size(heading.Width, 0)).Height &&
+                        heading.Right <= content.ClientSize.Width && heading.Bottom <= warning.Top,
+                        $"Confirmation uses the saved name and wraps without overlap at {size}pt " +
+                        $"(text={heading.Text}, heading={heading.Bounds}, preferred={heading.GetPreferredSize(new System.Drawing.Size(heading.Width, 0))}, " +
+                        $"content={content.ClientSize}, warning={warning.Bounds})");
+                    Check(warning.Height >= warning.GetPreferredSize(new System.Drawing.Size(warning.Width, 0)).Height,
+                        $"Full confirmation warning fits at {size}pt");
+                    Check(warning.Bottom <= suppress.Top,
+                        $"Confirmation warning does not overlap preference at {size}pt");
+                    Check(content.Bottom <= dialog.ClientSize.Height,
+                        $"All confirmation rows fit inside the dialog at {size}pt");
+                    Check(dialog.AcceptButton is Button button && button.Text == "Cancel",
+                        $"Cancel remains default at {size}pt");
+                }
             }
-            technicalTabs.SelectedIndex = 1;
-            var diagnosticPage = technicalTabs.SelectedTab!;
-            diagnosticPage.PerformLayout();
-            var diagnosticPanel = diagnosticPage.Controls.OfType<TableLayoutPanel>().Single();
-            diagnosticPanel.PerformLayout();
-            Check(!diagnosticPage.VerticalScroll.Visible && !diagnosticPage.HorizontalScroll.Visible &&
-                diagnosticPanel.Controls.Cast<Control>().All(control =>
-                    control.Right <= diagnosticPanel.ClientSize.Width &&
-                    control.Bottom <= diagnosticPanel.ClientSize.Height) &&
-                advanced.Width <= Screen.FromControl(advanced).WorkingArea.Width &&
-                advanced.Height <= Screen.FromControl(advanced).WorkingArea.Height,
-                $"Diagnostics controls fit and settings stay within the screen at {size}pt");
-            Check(main.Width >= main.MinimumSize.Width && main.ClientSize.Width >= 600 * main.DeviceDpi / 96d,
-                $"Content sizing preserves the designed minimum window width at {size}pt " +
-                $"(width={main.Width}, minimum={main.MinimumSize}, client={main.ClientSize}, DPI={main.DeviceDpi})");
-            Check(mainContent.Bottom <= main.ClientSize.Height || main.VerticalScroll.Visible,
-                $"Fixed main window fits content or allows scrolling at {size}pt");
-            Check(main.ClientSize.Height - mainContent.Bottom <= 1,
-                $"Main window has no unused height below its content at {size}pt");
-            foreach (var button in switches)
+            finally
             {
-                var required = TextRenderer.MeasureText(button.Text, button.Font,
-                    new System.Drawing.Size(Math.Max(1, button.Width - button.Padding.Horizontal - 8), int.MaxValue),
-                    TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl | TextFormatFlags.NoPrefix);
-                Check(button.Height >= required.Height + button.Padding.Vertical &&
-                    button.Right <= button.Parent!.ClientSize.Width && button.Bottom <= button.Parent.ClientSize.Height,
-                    $"Maximum-length custom button names wrap without clipping at {size}pt");
+                main.Font = originalFont;
+                advanced.Font = originalFont;
             }
-            int compactHeight = main.ClientSize.Height;
-            var setStatus = typeof(MainForm).GetMethod("SetStatus",
-                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
-            setStatus.Invoke(main, ["Downloading and verifying the update. Please wait for this operation to finish."]);
-            main.PerformLayout();
-            Check((main.ClientSize.Height > compactHeight || main.VerticalScroll.Visible) &&
-                (mainContent.Bottom <= main.ClientSize.Height || main.VerticalScroll.Visible),
-                $"Status messages expand the compact window without clipping at {size}pt");
-            setStatus.Invoke(main, [""]);
-            main.PerformLayout();
-            Check(main.ClientSize.Height == compactHeight,
-                $"Clearing status restores compact height at {size}pt");
-            var (dialog, suppress) = main.CreateInputConfirmation(
-                "Samsung Odyssey OLED G9 - a long monitor description", 0, 15);
-            using (dialog)
-            {
-                // Create handles and lay out without showing the dialog or discovering monitors.
-                _ = dialog.Handle;
-                dialog.PerformAutoScale();
-                dialog.PerformLayout();
-                var content = (TableLayoutPanel)dialog.Controls[0];
-                content.PerformLayout();
-                var warning = (Label)content.GetControlFromPosition(0, 1)!;
-                var heading = (Label)content.GetControlFromPosition(0, 0)!;
-                Check(heading.Text == $"Switch to {labels[0]}?" && !heading.UseMnemonic &&
-                    heading.Height >= heading.GetPreferredSize(new System.Drawing.Size(heading.Width, 0)).Height &&
-                    heading.Right <= content.ClientSize.Width && heading.Bottom <= warning.Top,
-                    $"Confirmation uses the saved name and wraps without overlap at {size}pt " +
-                    $"(text={heading.Text}, heading={heading.Bounds}, preferred={heading.GetPreferredSize(new System.Drawing.Size(heading.Width, 0))}, " +
-                    $"content={content.ClientSize}, warning={warning.Bounds})");
-                Check(warning.Height >= warning.GetPreferredSize(new System.Drawing.Size(warning.Width, 0)).Height,
-                    $"Full confirmation warning fits at {size}pt");
-                Check(warning.Bottom <= suppress.Top,
-                    $"Confirmation warning does not overlap preference at {size}pt");
-                Check(content.Bottom <= dialog.ClientSize.Height,
-                    $"All confirmation rows fit inside the dialog at {size}pt");
-                Check(dialog.AcceptButton is Button button && button.Text == "Cancel",
-                    $"Cancel remains default at {size}pt");
-            }
-            main.Font = originalFont;
-            advanced.Font = originalFont;
         }
     }
     catch (Exception error) { layoutError = error; }
