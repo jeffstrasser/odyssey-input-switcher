@@ -412,9 +412,18 @@ var layoutThread = new Thread(() =>
             "Footer retains Run in tray but no Settings button");
         var trayMenu = (ContextMenuStrip)typeof(MainForm).GetField("trayMenu",
             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(main)!;
-        var traySettings = trayMenu.Items.OfType<ToolStripMenuItem>().Single(item => item.Text == "Settings");
-        Check(traySettings.DropDownItems.OfType<ToolStripMenuItem>().Select(item => item.Text).SequenceEqual(expectedMenu),
-            "Tray Settings submenu preserves the same actions as the standard menu bar");
+        var trayMonitor = (ToolStripMenuItem)typeof(MainForm).GetField("trayMonitor",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(main)!;
+        var menuInputs = (ToolStripMenuItem[])typeof(MainForm).GetField("trayInputs",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(main)!;
+        var trayHiddenMessage = (ToolStripMenuItem)typeof(MainForm).GetField("trayAllInputsHidden",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(main)!;
+        Check(trayMenu.Items.Count == 6 && trayMenu.Items[0] == trayMonitor &&
+            trayMenu.Items[1] is ToolStripSeparator &&
+            trayMenu.Items.Cast<ToolStripItem>().Skip(2).SequenceEqual(
+                menuInputs.Cast<ToolStripItem>().Append(trayHiddenMessage)) &&
+            trayMenu.Items.OfType<ToolStripMenuItem>().All(item => !item.HasDropDownItems),
+            "Tray menu contains only the monitor heading, input choices and all-hidden guidance");
         Check(main.FormBorderStyle == FormBorderStyle.FixedSingle && !main.MaximizeBox,
             "Main window cannot be manually resized or maximized");
         var advanced = (Form)typeof(MainForm).GetField("advanced",

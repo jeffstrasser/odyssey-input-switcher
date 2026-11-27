@@ -17,11 +17,9 @@ internal sealed class MainForm : Form
     };
     private readonly Button refresh = MakeButton("Refresh");
     private readonly ToolStripMenuItem saveDefault = new("Save selected monitor as default");
-    private readonly ToolStripMenuItem traySaveDefault = new("Save selected monitor as default");
     private readonly MenuStrip menuBar = new() { Dock = DockStyle.Top };
     private readonly ToolStripMenuItem settingsMenu = new("&Settings");
     private readonly ToolStripMenuItem startupItem = new("Run at Windows startup");
-    private readonly ToolStripMenuItem trayStartupItem = new("Run at Windows startup");
     private readonly ToolStripMenuItem settingsUpdate = new("Check for updates...");
     private readonly TabControl settingsTabs = new() { Dock = DockStyle.Fill, Padding = new Point(16, 8) };
     private readonly Button diagnostics = MakeButton("Read monitor diagnostics");
@@ -62,8 +60,6 @@ internal sealed class MainForm : Form
         Enabled = false, Visible = false
     };
     private readonly ToolStripMenuItem trayMonitor = new("Discovering monitors...") { Enabled = false };
-    private readonly ToolStripMenuItem trayRefresh = new("Refresh monitors");
-    private readonly ToolStripMenuItem trayUpdate = new("Check for updates...");
     private readonly CancellationTokenSource updateCancellation = new();
     private readonly NotifyIcon tray = new();
     private readonly ContextMenuStrip trayMenu = new();
@@ -128,7 +124,6 @@ internal sealed class MainForm : Form
         };
         refresh.Click += (_, _) => QueueRefresh("Manual refresh");
         saveDefault.Click += (_, _) => SaveDefault();
-        traySaveDefault.Click += (_, _) => SaveDefault();
         clearDefault.Click += (_, _) => SaveDefault(clear: true);
         diagnostics.Click += async (_, _) => await DiagnosticsAsync();
         save.Click += (_, _) => SaveSettings();
@@ -501,15 +496,6 @@ internal sealed class MainForm : Form
             trayMenu.Items.Add(trayInputs[i]);
         }
         trayMenu.Items.Add(trayAllInputsHidden);
-        trayMenu.Items.Add(new ToolStripSeparator());
-        trayMenu.Items.Add("Show Odyssey", null, (_, _) => ShowMainWindow());
-        trayRefresh.Click += (_, _) => QueueRefresh("Tray refresh");
-        trayMenu.Items.Add(trayRefresh);
-        var traySettings = new ToolStripMenuItem("Settings");
-        PopulateSettingsMenu(traySettings.DropDownItems, trayStartupItem, trayUpdate, traySaveDefault);
-        traySettings.DropDownOpening += (_, _) => { RefreshStartupSetting(); UpdateControls(); };
-        trayMenu.Items.Add(traySettings);
-        trayMenu.Items.Add("Exit", null, (_, _) => ExitApplication());
         trayMenu.Opening += (_, _) => UpdateControls();
         tray.Icon = Icon;
         tray.Text = "Odyssey Input Switcher";
@@ -582,7 +568,7 @@ internal sealed class MainForm : Form
     {
         try
         {
-            startupItem.Checked = trayStartupItem.Checked = StartupRegistration.IsEnabled();
+            startupItem.Checked = StartupRegistration.IsEnabled();
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or
             System.Security.SecurityException or InvalidOperationException)
@@ -619,16 +605,14 @@ internal sealed class MainForm : Form
         bool selected = !busy && !confirming && !exiting && monitor is not null;
         monitors.Enabled = !busy && !stale;
         refresh.Enabled = !busy && !exiting;
-        trayRefresh.Enabled = refresh.Enabled;
-        trayUpdate.Enabled = !busy && !confirming && !exiting;
-        settingsUpdate.Enabled = trayUpdate.Enabled;
-        startupItem.Enabled = trayStartupItem.Enabled = !busy && !exiting;
+        settingsUpdate.Enabled = !busy && !confirming && !exiting;
+        startupItem.Enabled = !busy && !exiting;
         diagnostics.Enabled = selected;
         save.Enabled = restore.Enabled = !busy && !exiting;
         confirmSwitch.Enabled = !busy && !exiting;
         clearDefault.Enabled = !busy && preferences.DefaultMonitorId is not null;
-        saveDefault.Visible = traySaveDefault.Visible = monitors.Items.Count > 1;
-        saveDefault.Enabled = traySaveDefault.Enabled = selected && monitor?.StableId is not null &&
+        saveDefault.Visible = monitors.Items.Count > 1;
+        saveDefault.Enabled = selected && monitor?.StableId is not null &&
             MonitorSelection.FindUnique(CurrentIdentities(), monitor.StableId) == monitors.SelectedIndex;
         defaultLabel.Text = monitor is null ? "" : monitors.Items.Count == 1 ? "Selected automatically"
             : monitor.StableId is null ? "Select manually after display changes."
@@ -695,7 +679,7 @@ internal sealed class MainForm : Form
                     "Odyssey update available", MessageBoxButtons.YesNo, MessageBoxIcon.Question,
                     MessageBoxDefaultButton.Button2) != DialogResult.Yes || exiting)
                 {
-                    SetStatus("Update declined. Use the tray menu to check again.");
+                    SetStatus("Update declined. Use Settings > Check for updates... to check again.");
                     return;
                 }
                 approved = true;
