@@ -75,7 +75,8 @@ var
 begin
   LegacyInstall := RegQueryStringValue(HKCU,
     'Software\Microsoft\Windows\CurrentVersion\Uninstall\{29D7D90B-4F22-4F2E-AF74-476F234D7E42}_is1',
-    'DisplayName', PreviousName) and (CompareText(PreviousName, 'Odyssey Input Switcher') = 0);
+    'DisplayName', PreviousName) and
+    (CompareText(Copy(PreviousName, 1, Length('Odyssey Input Switcher')), 'Odyssey Input Switcher') = 0);
   if not WizardSilent then
     MsgBox('Close Connected Display Input Selector before installing or upgrading: use Quit in the tray menu, or Settings > Exit.' + #13#10 +
       'Installation preserves your saved settings and does not enable Windows startup.',

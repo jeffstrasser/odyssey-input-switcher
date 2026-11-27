@@ -28,6 +28,10 @@ if (args.Length == 4 && args[0] == "--verify-package")
         string executable = Path.Combine(staged, "payload.exe");
         ReleaseUpdater.ExtractExecutable(args[1], executable);
         ReleaseUpdater.ValidateExecutable(executable, ReleaseUpdater.ParseVersion(args[3]), Enum.Parse<Architecture>(args[2]));
+        var metadata = FileVersionInfo.GetVersionInfo(executable);
+        if (metadata.ProductName != "Connected Display Input Selector" ||
+            metadata.FileDescription != "Connected Display Input Selector")
+            throw new InvalidDataException("The published executable must use the renamed product and file description.");
         Console.WriteLine($"PASS: {args[2]} release ZIP shape, executable headers, architecture, and version {args[3]}.");
     }
     finally { Directory.Delete(staged, recursive: true); }
