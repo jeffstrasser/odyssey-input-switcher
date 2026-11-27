@@ -2,10 +2,38 @@ param(
     [ValidateSet('win-x64', 'win-arm64', 'all')]
     [string]$Architecture = 'all',
     [ValidatePattern('^\d+\.\d+\.\d+$')]
-    [string]$Version = '1.2.0'
+    [string]$Version,
+    [switch]$SkipInstaller,
+    [string]$InnoCompiler
 )
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
+if (!$Version) {
+    [xml]$project = Get-Content -LiteralPath 'OdysseyInputSwitcher.csproj'
+    $Version = [string]$project.Project.PropertyGroup.Version
+}
+if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw 'Version must be MAJOR.MINOR.PATCH.' }
+if (!$SkipInstaller -and $Architecture -ne 'all') {
+    throw 'The universal installer requires both architectures. Use -Architecture all or explicitly -SkipInstaller.'
+}
+if (!$SkipInstaller) {
+    if (!$InnoCompiler) {
+        $command = Get-Command ISCC.exe -ErrorAction SilentlyContinue
+        if ($command) { $InnoCompiler = $command.Source }
+        else {
+            foreach ($root in @(${env:ProgramFiles(x86)}, $env:ProgramFiles, $env:LOCALAPPDATA)) {
+                if (!$root) { continue }
+                $candidate = Join-Path $root 'Inno Setup 6\ISCC.exe'
+                if (Test-Path -LiteralPath $candidate) { $InnoCompiler = $candidate; break }
+                $candidate = Join-Path $root 'Programs\Inno Setup 6\ISCC.exe'
+                if (Test-Path -LiteralPath $candidate) { $InnoCompiler = $candidate; break }
+            }
+        }
+    }
+    if (!$InnoCompiler -or !(Test-Path -LiteralPath $InnoCompiler)) {
+        throw 'Inno Setup 6.7.3 is required. Install it, pass -InnoCompiler, or explicitly use -SkipInstaller for portable builds.'
+    }
+}
 $localSdk = Join-Path $PSScriptRoot '.tools\dotnet\dotnet.exe'
 if (Test-Path $localSdk) {
     $dotnet = $localSdk
@@ -26,4 +54,25 @@ foreach ($target in $targets) {
     Copy-Item 'README.md' "dist\$target\README.md"
     Compress-Archive -LiteralPath "dist\$target\OdysseyInputSwitcher.exe", "dist\$target\README.md" `
         -DestinationPath "dist\OdysseyInputSwitcher-$target.zip" -CompressionLevel Optimal -Force
+    $testArchitecture = 'X64'
+    if ($target -eq 'win-arm64') { $testArchitecture = 'Arm64' }
+    & $dotnet run --project 'tests\SwitcherTests.csproj' -c Release -- `
+        --verify-package "dist\OdysseyInputSwitcher-$target.zip" $testArchitecture $Version
+    if ($LASTEXITCODE -ne 0) { throw "Package verification failed: $target" }
 }
+if (!$SkipInstaller) {
+    $setup = "dist\OdysseyInputSwitcher-Setup-$Version.exe"
+    if (Test-Path -LiteralPath $setup) { Remove-Item -LiteralPath $setup }
+    & $InnoCompiler /Qp "/DAppVersion=$Version" 'installer\OdysseyInputSwitcher.iss'
+    if ($LASTEXITCODE -ne 0 -or !(Test-Path -LiteralPath $setup)) {
+        throw 'Universal installer compilation failed.'
+    }
+}
+$artifacts = @("dist\OdysseyInputSwitcher-$($targets[0]).zip")
+if ($targets.Length -gt 1) { $artifacts += "dist\OdysseyInputSwitcher-$($targets[1]).zip" }
+if (!$SkipInstaller) { $artifacts += $setup }
+$checksums = foreach ($artifact in $artifacts) {
+    $hash = Get-FileHash -LiteralPath $artifact -Algorithm SHA256
+    '{0}  {1}' -f $hash.Hash.ToLowerInvariant(), [IO.Path]::GetFileName($artifact)
+}
+$checksums | Set-Content -LiteralPath "dist\SHA256SUMS-$Version.txt" -Encoding ASCII
