@@ -83,6 +83,7 @@ internal sealed class MainForm : Form
     private bool explainedTray;
     private bool startInTray;
     private bool initializationQueued;
+    private bool sizingSettings;
     private int displayGeneration;
     private static string SettingsDirectory => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "OdysseyInputSwitcher");
@@ -544,8 +545,63 @@ internal sealed class MainForm : Form
         advancedTab.Controls.Add(advancedTabs);
         settingsTabs.TabPages.Add(advancedTab);
         advanced.Controls.Add(settingsTabs);
+        advanced.Layout += (_, _) => FitSettingsContent();
+        advanced.VisibleChanged += (_, _) => FitSettingsContent();
+        settingsTabs.SelectedIndexChanged += (_, _) => FitSettingsContent();
+        advancedTabs.SelectedIndexChanged += (_, _) => FitSettingsContent();
+        foreach (var panel in new[] { generalLayout, namesLayout, settingsLayout, diagnosticLayout })
+            panel.Layout += (_, _) => FitSettingsContent();
         PopulateSettingsMenu(settingsMenu.DropDownItems, settingsUpdate);
         settingsMenu.DropDownOpening += (_, _) => { RefreshStartupSetting(); UpdateControls(); };
+    }
+
+    private void FitSettingsContent()
+    {
+        if (sizingSettings || !advanced.IsHandleCreated || settingsTabs.SelectedTab is not { } page)
+            return;
+        sizingSettings = true;
+        try
+        {
+            var workingArea = Screen.FromControl(advanced).WorkingArea;
+            int frameWidth = advanced.Width - advanced.ClientSize.Width;
+            int frameHeight = advanced.Height - advanced.ClientSize.Height;
+            double scale = advanced.DeviceDpi / 96d;
+            int width = Math.Min((int)Math.Ceiling(750 * scale * advanced.Font.Size / 10),
+                workingArea.Width - frameWidth);
+            if (advanced.ClientSize.Width != width)
+                advanced.ClientSize = new Size(width, advanced.ClientSize.Height);
+            settingsTabs.PerformLayout();
+            int tabHeight = settingsTabs.Height - settingsTabs.DisplayRectangle.Height;
+            if (page.Controls.OfType<TabControl>().SingleOrDefault() is { } nestedTabs)
+            {
+                nestedTabs.PerformLayout();
+                tabHeight += nestedTabs.Height - nestedTabs.DisplayRectangle.Height;
+                page = nestedTabs.SelectedTab!;
+            }
+            page.AutoScrollPosition = Point.Empty;
+            page.PerformLayout();
+            var content = page.Controls.OfType<TableLayoutPanel>().Single();
+            content.PerformLayout();
+            int contentWidth = Math.Max(1, page.ClientSize.Width - page.Padding.Horizontal);
+            diagnosticSummary.MaximumSize = new Size(Math.Max(1, contentWidth - diagnosticSummary.Margin.Horizontal), 0);
+            int height = content.GetPreferredSize(new Size(contentWidth, 0)).Height;
+            if (content.Dock == DockStyle.Fill)
+                height = diagnosticSummary.GetPreferredSize(new Size(diagnosticSummary.MaximumSize.Width, 0)).Height +
+                    diagnosticSummary.Margin.Vertical + diagnostics.GetPreferredSize(Size.Empty).Height +
+                    diagnostics.Margin.Vertical + (int)Math.Ceiling(200 * scale);
+            height = Math.Min(Math.Max((int)Math.Ceiling(560 * scale),
+                height + page.Padding.Vertical + tabHeight), workingArea.Height - frameHeight);
+            if (advanced.ClientSize.Height != height)
+                advanced.ClientSize = new Size(width, height);
+            if (advanced.Visible)
+                advanced.Location = new Point(
+                    Math.Clamp(advanced.Left, workingArea.Left, workingArea.Right - advanced.Width),
+                    Math.Clamp(advanced.Top, workingArea.Top, workingArea.Bottom - advanced.Height));
+        }
+        finally
+        {
+            sizingSettings = false;
+        }
     }
 
     private void BuildTray()

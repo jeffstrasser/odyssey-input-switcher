@@ -707,7 +707,7 @@ var layoutThread = new Thread(() =>
         }
         typeof(MainForm).GetMethod("SetStatus",
             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.Invoke(main, [""]);
-        foreach (float size in new[] { 10f, 16f, 24f })
+        foreach (float size in new[] { 10f, 16f, 24f, 10f })
         {
             using var font = new System.Drawing.Font("Segoe UI", size);
             main.Font = font;
@@ -761,12 +761,27 @@ var layoutThread = new Thread(() =>
                         .All(control => control.Right <= control.Parent!.ClientSize.Width &&
                             control.Bottom <= control.Parent.ClientSize.Height &&
                             control.Height >= control.GetPreferredSize(new System.Drawing.Size(control.Width, 0)).Height) &&
-                    (panel.Bottom <= page.ClientSize.Height || page.VerticalScroll.Visible),
-                    $"{page.Text} preferences and Save actions fit or scroll at {size}pt " +
+                    panel.Top >= page.Padding.Top &&
+                    (advanced.Height >= Screen.FromControl(advanced).WorkingArea.Height ||
+                        (panel.Bottom + page.Padding.Bottom <= page.ClientSize.Height &&
+                            !page.VerticalScroll.Visible && !page.HorizontalScroll.Visible)),
+                    $"{page.Text} preferences and Save actions fit without scrolling unless screen-limited at {size}pt " +
                     $"(page={page.ClientSize}, panel={panel.Bounds}, scroll={page.VerticalScroll.Visible}, " +
                     $"controls={string.Join("; ", panel.Controls.Cast<Control>().Select(control => $"{control.Text}: {control.Bounds}, preferred={control.GetPreferredSize(new System.Drawing.Size(control.Width, 0))}"))}, " +
                     $"buttons={string.Join("; ", panel.Controls.OfType<FlowLayoutPanel>().SelectMany(flow => flow.Controls.Cast<Control>()).Select(control => $"{control.Text}: {control.Bounds}, parent={control.Parent!.ClientSize}"))})");
             }
+            technicalTabs.SelectedIndex = 1;
+            var diagnosticPage = technicalTabs.SelectedTab!;
+            diagnosticPage.PerformLayout();
+            var diagnosticPanel = diagnosticPage.Controls.OfType<TableLayoutPanel>().Single();
+            diagnosticPanel.PerformLayout();
+            Check(!diagnosticPage.VerticalScroll.Visible && !diagnosticPage.HorizontalScroll.Visible &&
+                diagnosticPanel.Controls.Cast<Control>().All(control =>
+                    control.Right <= diagnosticPanel.ClientSize.Width &&
+                    control.Bottom <= diagnosticPanel.ClientSize.Height) &&
+                advanced.Width <= Screen.FromControl(advanced).WorkingArea.Width &&
+                advanced.Height <= Screen.FromControl(advanced).WorkingArea.Height,
+                $"Diagnostics controls fit and settings stay within the screen at {size}pt");
             Check(main.Width >= main.MinimumSize.Width && main.ClientSize.Width >= 600 * main.DeviceDpi / 96d,
                 $"Content sizing preserves the designed minimum window width at {size}pt " +
                 $"(width={main.Width}, minimum={main.MinimumSize}, client={main.ClientSize}, DPI={main.DeviceDpi})");
