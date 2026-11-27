@@ -57,7 +57,7 @@ If you approve, the app downloads the ZIP for its running process architecture (
 
 In-place upgrades require the **published single-file release** in a writable directory. Protected installation folders, other running copies, or antivirus locks can prevent replacement; the app does not request elevation. Source builds cannot self-install. Saved input and monitor preferences remain unchanged. Packages are unsigned: the digest verifies the downloaded archive against GitHub metadata, not independent publisher identity. Old versions without this feature require one manual upgrade first.
 
-Automated release tags must be `vMAJOR.MINOR.PATCH` and match the project version, with matching `OdysseyInputSwitcher-win-x64.zip` / `OdysseyInputSwitcher-win-arm64.zip` assets and GitHub SHA-256 digests. Publish with `.\build.ps1 -Version MAJOR.MINOR.PATCH` so the executable version matches the tag. The build defaults to the project version (currently 1.4.0). Do not reuse version numbers. The in-app updater continues to use the native ZIP, not the universal Setup executable.
+Automated release tags must be `vMAJOR.MINOR.PATCH` and match the project version, with matching `OdysseyInputSwitcher-win-x64.zip` / `OdysseyInputSwitcher-win-arm64.zip` assets and GitHub SHA-256 digests. Publish with `.\build.ps1 -Version MAJOR.MINOR.PATCH` so the executable version matches the tag. The build defaults to the project version (currently 1.4.1). Do not reuse version numbers. The in-app updater continues to use the native ZIP, not the universal Setup executable.
 
 ## Settings and saved preferences
 
