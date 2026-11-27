@@ -1106,7 +1106,7 @@ internal sealed class MainForm : Form
         SetStatus("Operation failed. Open Settings > Advanced > Diagnostics for details.");
         Append(error.ToString());
         tray.ShowBalloonTip(5000, AppName + " operation failed", error.Message, ToolTipIcon.Error);
-        if (showDialog)
+        if (showDialog && !startInTray)
             MessageBox.Show(advanced.Visible ? advanced : Visible ? this : null, error.Message +
                 "\r\n\r\nSee Settings > Advanced > Diagnostics for details. The DDC/CI connection may be unavailable.",
                 AppName, MessageBoxButtons.OK, MessageBoxIcon.Error);

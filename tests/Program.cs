@@ -577,6 +577,21 @@ var layoutThread = new Thread(() =>
         }
         if (args.Contains("--daily-updates-only"))
             return;
+        using (var firstTrayLaunch = new MainForm(startInTray: true,
+            windowPositionPath: Path.Combine(placementDirectory, "first-tray.json")))
+        {
+            var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+            firstTrayLaunch.Show();
+            var notify = (NotifyIcon)typeof(MainForm).GetField("tray", flags)!.GetValue(firstTrayLaunch)!;
+            Check(!firstTrayLaunch.Visible && notify.Visible &&
+                !(bool)typeof(MainForm).GetField("placementLoaded", flags)!.GetValue(firstTrayLaunch)!,
+                "A fresh Windows startup launch stays tray-only without loading/showing the main form");
+            typeof(MainForm).GetMethod("ReportFailure", flags)!.Invoke(firstTrayLaunch,
+                [new IOException("Simulated first-run settings failure"), true]);
+            var log = (TextBox)typeof(MainForm).GetField("log", flags)!.GetValue(firstTrayLaunch)!;
+            Check(!firstTrayLaunch.Visible && log.Text.Contains("Simulated first-run settings failure"),
+                "First-run tray failures are logged and notified without opening a modal dialog or main form");
+        }
         using (var generic = new MainForm(startInTray: true, windowPositionPath: placementPath))
         {
             var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
