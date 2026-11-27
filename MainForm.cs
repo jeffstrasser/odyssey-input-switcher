@@ -18,8 +18,8 @@ internal sealed class MainForm : Form
     private readonly Button refresh = MakeButton("Refresh");
     private readonly ToolStripMenuItem saveDefault = new("Save selected monitor as default");
     private readonly ToolStripMenuItem traySaveDefault = new("Save selected monitor as default");
-    private readonly Button settingsButton = MakeButton("Settings");
-    private readonly ContextMenuStrip settingsMenu = new();
+    private readonly MenuStrip menuBar = new() { Dock = DockStyle.Top };
+    private readonly ToolStripMenuItem settingsMenu = new("&Settings");
     private readonly ToolStripMenuItem startupItem = new("Run at Windows startup");
     private readonly ToolStripMenuItem trayStartupItem = new("Run at Windows startup");
     private readonly ToolStripMenuItem settingsUpdate = new("Check for updates...");
@@ -114,7 +114,6 @@ internal sealed class MainForm : Form
         saveDefault.Click += (_, _) => SaveDefault();
         traySaveDefault.Click += (_, _) => SaveDefault();
         clearDefault.Click += (_, _) => SaveDefault(clear: true);
-        settingsButton.Click += (_, _) => settingsMenu.Show(settingsButton, new Point(0, settingsButton.Height));
         diagnostics.Click += async (_, _) => await DiagnosticsAsync();
         save.Click += (_, _) => SaveSettings();
         confirmSwitch.CheckedChanged += (_, _) => SaveConfirmationPreference();
@@ -281,7 +280,6 @@ internal sealed class MainForm : Form
         }
         layout.Controls.Add(inputs, 0, 6);
         var footer = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top };
-        footer.Controls.Add(settingsButton);
         var hide = MakeButton("Run in tray");
         hide.Click += (_, _) => { advanced.Hide(); Hide(); };
         footer.Controls.Add(hide);
@@ -290,6 +288,11 @@ internal sealed class MainForm : Form
         status.Margin = new Padding(2, 12, 0, 0);
         layout.Controls.Add(status, 0, 8);
         Controls.Add(layout);
+        menuBar.Font = Font;
+        menuBar.Items.Add(settingsMenu);
+        MainMenuStrip = menuBar;
+        Controls.Add(menuBar);
+        FontChanged += (_, _) => menuBar.Font = Font;
     }
 
     private void BuildAdvancedWindow()
@@ -369,9 +372,8 @@ internal sealed class MainForm : Form
         settingsTabs.TabPages.Add(diagnosticTab);
         settingsTabs.TabPages.Add(settingsTab);
         advanced.Controls.Add(settingsTabs);
-        PopulateSettingsMenu(settingsMenu.Items, startupItem, settingsUpdate);
-        settingsMenu.Items.Add(saveDefault);
-        settingsMenu.Opening += (_, _) => { RefreshStartupSetting(); UpdateControls(); };
+        PopulateSettingsMenu(settingsMenu.DropDownItems, startupItem, settingsUpdate, saveDefault);
+        settingsMenu.DropDownOpening += (_, _) => { RefreshStartupSetting(); UpdateControls(); };
     }
 
     private void BuildTray()
@@ -390,8 +392,7 @@ internal sealed class MainForm : Form
         trayRefresh.Click += (_, _) => QueueRefresh("Tray refresh");
         trayMenu.Items.Add(trayRefresh);
         var traySettings = new ToolStripMenuItem("Settings");
-        PopulateSettingsMenu(traySettings.DropDownItems, trayStartupItem, trayUpdate);
-        traySettings.DropDownItems.Add(traySaveDefault);
+        PopulateSettingsMenu(traySettings.DropDownItems, trayStartupItem, trayUpdate, traySaveDefault);
         traySettings.DropDownOpening += (_, _) => { RefreshStartupSetting(); UpdateControls(); };
         trayMenu.Items.Add(traySettings);
         trayMenu.Items.Add("Exit", null, (_, _) => ExitApplication());
@@ -420,7 +421,7 @@ internal sealed class MainForm : Form
     }
 
     private void PopulateSettingsMenu(ToolStripItemCollection items,
-        ToolStripMenuItem startup, ToolStripMenuItem update)
+        ToolStripMenuItem startup, ToolStripMenuItem update, ToolStripMenuItem defaultMonitor)
     {
         startup.Click += (_, _) =>
         {
@@ -440,10 +441,11 @@ internal sealed class MainForm : Form
         items.Add(startup);
         items.Add(new ToolStripSeparator());
         items.Add("Input & monitor settings...", null, (_, _) => ShowAdvanced(1));
+        items.Add(defaultMonitor);
         items.Add("Diagnostics & logging...", null, (_, _) => ShowAdvanced(0));
+        items.Add(new ToolStripSeparator());
         update.Click += async (_, _) => await CheckForUpdatesAsync(manual: true);
         items.Add(update);
-        items.Add(new ToolStripSeparator());
         items.Add("About Odyssey...", null, (_, _) => ShowAbout());
     }
 
@@ -1087,7 +1089,6 @@ internal sealed class MainForm : Form
             tray.Visible = false;
             tray.Dispose();
             trayMenu.Dispose();
-            settingsMenu.Dispose();
             advanced.Dispose();
             Icon?.Dispose();
         }

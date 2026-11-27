@@ -360,6 +360,22 @@ var layoutThread = new Thread(() =>
             hidden.Hide();
         }
         using var main = new MainForm();
+        var menu = main.MainMenuStrip ?? throw new Exception("Standard menu bar is missing.");
+        var settingsMenu = (ToolStripMenuItem)menu.Items[0];
+        string[] expectedMenu = ["Run at Windows startup", "Input & monitor settings...",
+            "Save selected monitor as default", "Diagnostics & logging...", "Check for updates...", "About Odyssey..."];
+        Check(settingsMenu.Text == "&Settings" && settingsMenu.DropDownItems.OfType<ToolStripMenuItem>()
+            .Select(item => item.Text).SequenceEqual(expectedMenu),
+            "Standard Settings menu exposes preferences, logging, updates and About with a keyboard mnemonic");
+        var mainLayout = main.Controls.OfType<TableLayoutPanel>().Single();
+        var footer = (FlowLayoutPanel)mainLayout.GetControlFromPosition(0, 7)!;
+        Check(footer.Controls.OfType<Button>().Select(button => button.Text).SequenceEqual(["Run in tray"]),
+            "Footer retains Run in tray but no Settings button");
+        var trayMenu = (ContextMenuStrip)typeof(MainForm).GetField("trayMenu",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(main)!;
+        var traySettings = trayMenu.Items.OfType<ToolStripMenuItem>().Single(item => item.Text == "Settings");
+        Check(traySettings.DropDownItems.OfType<ToolStripMenuItem>().Select(item => item.Text).SequenceEqual(expectedMenu),
+            "Tray Settings submenu preserves the same actions as the standard menu bar");
         Check(main.FormBorderStyle == FormBorderStyle.FixedSingle && !main.MaximizeBox,
             "Main window cannot be manually resized or maximized");
         var advanced = (Form)typeof(MainForm).GetField("advanced",
@@ -374,8 +390,12 @@ var layoutThread = new Thread(() =>
             typeof(MainForm).GetMethod("SetScaledMinimumSize",
                 System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.Invoke(main, null);
             main.PerformLayout();
-            var mainContent = (TableLayoutPanel)main.Controls[0];
+            var mainContent = mainLayout;
             mainContent.PerformLayout();
+            Check(menu.Bottom <= mainContent.Top,
+                $"Top menu does not overlap main content at {size}pt");
+            Check(menu.Font.Size == main.Font.Size,
+                $"Menu follows the main window font at {size}pt");
             Check(main.Width >= main.MinimumSize.Width && main.ClientSize.Width >= 600 * main.DeviceDpi / 96d,
                 $"Content sizing preserves the designed minimum window width at {size}pt");
             Check(mainContent.Bottom <= main.ClientSize.Height || main.VerticalScroll.Visible,
