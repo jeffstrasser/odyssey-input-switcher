@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.ComponentModel;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 
 namespace OdysseyInputSwitcher;
@@ -13,9 +14,14 @@ internal sealed class MonitorInput
     public bool Visible { get; set; } = true;
 }
 
+[JsonConverter(typeof(JsonStringEnumConverter<InputConfigurationSource>))]
+internal enum InputConfigurationSource { Unknown, Advertised, UserConfigured }
+
 internal sealed class MonitorProfile
 {
+    public InputConfigurationSource Source { get; set; }
     public List<MonitorInput> Inputs { get; set; } = [];
+    internal bool Configured => Source == InputConfigurationSource.UserConfigured;
 }
 
 internal sealed record MonitorProfileDiscovery(MonitorProfile Profile, bool Remembered, Exception? Error);
@@ -89,25 +95,34 @@ internal static class MonitorProfiles
                 "The monitor did not advertise input-source values. DDC/CI support does not guarantee input switching.");
         return new MonitorProfile
         {
+            Source = InputConfigurationSource.Advertised,
             Inputs = inputs.Select(value => new MonitorInput
             {
-                Id = $"0x{value:X4}", Name = PortName(value), Value = $"0x{value:X4}"
+                Id = $"0x{value:X4}", Name = $"Input 0x{value:X4}", Value = $"0x{value:X4}"
             }).ToList()
         };
     }
 
-    private static string PortName(uint value) => value switch
+    internal static string ReviewExplanation(MonitorProfile profile) => profile.Inputs.Count == 0
+        ? "This monitor didn't report usable input settings. Open Settings > Inputs... and add names and values " +
+            "from its documentation or a known-working configuration. Don't guess values."
+        : profile.Source == InputConfigurationSource.Advertised
+        ? "The monitor advertised these values, but they may not match its physical inputs. " +
+            "Review and name them in Settings > Inputs..., then save before switching."
+        : "These input values haven't been reviewed for this monitor. Older profiles may have been discovered " +
+            "automatically; imported presets may not apply. Review them in Settings > Inputs..., then save before switching.";
+
+    internal static string Summary(MonitorProfile profile) => profile.Source switch
     {
-        1 => "VGA 1", 2 => "VGA 2", 3 => "DVI 1", 4 => "DVI 2",
-        5 => "Composite 1", 6 => "Composite 2", 7 => "S-Video 1", 8 => "S-Video 2",
-        9 => "Tuner 1", 10 => "Tuner 2", 11 => "Tuner 3",
-        12 => "Component 1", 13 => "Component 2", 14 => "Component 3",
-        15 => "DisplayPort 1", 16 => "DisplayPort 2", 17 => "HDMI 1", 18 => "HDMI 2",
-        _ => $"Input 0x{value:X4}"
+        InputConfigurationSource.UserConfigured => "User-configured inputs (not hardware-verified)",
+        InputConfigurationSource.Advertised => "Advertised values (not reviewed or hardware-verified)",
+        _ => "Unknown input provenance (review required)"
     };
 
     internal static void Validate(MonitorProfile profile)
     {
+        if (!Enum.IsDefined(profile.Source))
+            throw new InvalidOperationException("Saved monitor input provenance is invalid.");
         if (profile.Inputs is null)
             throw new InvalidOperationException("Saved monitor inputs are missing.");
         var identities = new HashSet<string>(StringComparer.Ordinal);
@@ -145,6 +160,7 @@ internal static class MonitorProfiles
     internal static MonitorProfile FromLegacy(Dictionary<string, string> values,
         Dictionary<string, string> names, Dictionary<string, bool> visibility) => new()
     {
+        Source = InputConfigurationSource.UserConfigured,
         Inputs = values.Select(entry => new MonitorInput
         {
             Id = entry.Key, Name = names[entry.Key], Value = entry.Value, Visible = visibility[entry.Key]

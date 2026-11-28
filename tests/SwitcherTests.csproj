@@ -14,6 +14,7 @@
     <Compile Include="..\AppErrors.cs" Link="AppErrors.cs" />
     <Compile Include="..\WindowPlacement.cs" Link="WindowPlacement.cs" />
     <Compile Include="..\NativeMonitor.cs" Link="NativeMonitor.cs" />
+    <Compile Include="..\WindowsMonitorIdentity.cs" Link="WindowsMonitorIdentity.cs" />
     <Compile Include="..\MonitorSelection.cs" Link="MonitorSelection.cs" />
     <Compile Include="..\ReleaseUpdater.cs" Link="ReleaseUpdater.cs" />
     <Compile Include="..\UpdateInstaller.cs" Link="UpdateInstaller.cs" />

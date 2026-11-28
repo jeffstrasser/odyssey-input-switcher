@@ -36,14 +36,19 @@ internal sealed class NativeMonitor : IMonitorConnection
     public string Description { get; }
     internal string DisplayName { get; }
     internal string? StableId { get; }
+    internal bool Identified { get; }
+    internal string IdentityDiagnostics { get; }
     internal int ReleaseError => handle.ReleaseError;
 
-    internal NativeMonitor(nint handle, string description, string displayName, string? stableId)
+    internal NativeMonitor(nint handle, string description, string displayName, string? stableId,
+        bool identified = true, string identityDiagnostics = "")
     {
         this.handle = new PhysicalMonitorHandle(handle);
         Description = description;
         DisplayName = displayName;
         StableId = stableId;
+        Identified = identified;
+        IdentityDiagnostics = identityDiagnostics;
     }
 
     public uint ReadInput()
@@ -83,10 +88,23 @@ internal sealed class MonitorInventory : IDisposable
 {
     internal List<NativeMonitor> Monitors { get; } = [];
     internal List<string> Messages { get; } = [];
+    private IReadOnlyList<WindowsDisplayTarget> targets = [];
+    private bool metadataComplete;
 
     internal static MonitorInventory Enumerate()
     {
         var inventory = new MonitorInventory();
+        try
+        {
+            var metadata = WindowsMonitorIdentity.ReadActiveTargets();
+            inventory.targets = metadata.Targets;
+            inventory.metadataComplete = metadata.Errors.Count == 0;
+            inventory.Messages.AddRange(metadata.Errors);
+        }
+        catch (Exception error) when (error is Win32Exception or InvalidOperationException)
+        {
+            inventory.Messages.Add("Windows display metadata unavailable: " + error.Message);
+        }
         // Never let managed exceptions cross the unmanaged callback boundary.
         Exception? callbackError = null;
         NativeMethods.MonitorEnumProc callback = (logical, _, _, _) =>
@@ -139,9 +157,7 @@ internal sealed class MonitorInventory : IDisposable
         }
         if (count > 256)
             throw new InvalidOperationException($"{identity}: implausible physical monitor count {count}.");
-        string? stableId = count == 1 ? GetStableId(info.Device) : null;
-        if (stableId is null)
-            Messages.Add($"{identity}: no unambiguous monitor interface identity; default selection is unavailable.");
+        var device = count == 1 ? GetDisplayDevice(info.Device) : (Id: (string?)null, Name: "");
         var physical = new NativeMethods.PhysicalMonitor[count];
         if (!NativeMethods.GetPhysicalMonitorsFromHMONITOR(logical, count, physical))
         {
@@ -153,11 +169,15 @@ internal sealed class MonitorInventory : IDisposable
         {
             for (int index = 0; index < physical.Length; index++)
             {
+                var identified = WindowsMonitorIdentity.Resolve(info.Device, device.Id, device.Name,
+                    physical[index].Description, count, targets, metadataComplete);
+                if (identified.StableId is null)
+                    Messages.Add($"{identity}: no unambiguous monitor interface identity; default selection is unavailable.");
                 var monitor = new NativeMonitor(physical[index].Handle,
                     $"{identity} / physical {index + 1}: {physical[index].Description}",
-                    $"{physical[index].Description} / {info.Device.Replace(@"\\.\", "")}" +
+                    $"{identified.Name} / {info.Device.Replace(@"\\.\", "")}" +
                         (count > 1 ? $" / {index + 1}" : ""),
-                    stableId);
+                    identified.StableId, identified.Identified, identified.Diagnostics);
                 claimed[index] = true;
                 try
                 {
@@ -181,9 +201,10 @@ internal sealed class MonitorInventory : IDisposable
         }
     }
 
-    private static string? GetStableId(string display)
+    private static (string? Id, string Name) GetDisplayDevice(string display)
     {
         string? identity = null;
+        string name = "";
         for (uint index = 0; index < 256; index++)
         {
             var device = new NativeMethods.DisplayDevice
@@ -191,14 +212,15 @@ internal sealed class MonitorInventory : IDisposable
                 Size = (uint)Marshal.SizeOf<NativeMethods.DisplayDevice>()
             };
             if (!NativeMethods.EnumDisplayDevices(display, index, ref device, 1))
-                return identity;
+                return (identity, name);
             if ((device.Flags & 1) == 0 || string.IsNullOrWhiteSpace(device.DeviceId))
                 continue;
             if (identity is not null)
-                return null;
+                return (null, "");
             identity = device.DeviceId;
+            name = device.DeviceString;
         }
-        return null;
+        return (null, "");
     }
 
     public void Dispose()
@@ -259,6 +281,11 @@ internal static class NativeMethods
     internal static Win32Exception Error(string operation)
     {
         int code = Marshal.GetLastWin32Error();
+        return Error(operation, code);
+    }
+
+    internal static Win32Exception Error(string operation, int code)
+    {
         return new Win32Exception(code,
             $"{operation}: {new Win32Exception(code).Message} (Windows error {code}).");
     }
