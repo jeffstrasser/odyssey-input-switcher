@@ -27,8 +27,6 @@ internal sealed class MainForm : Form
     private bool settingsReady;
     private bool sizingSettings;
     private readonly Button diagnostics = MakeButton("Read monitor diagnostics");
-    private readonly Button save = MakeButton("Save input values");
-    private readonly Button restore = MakeButton("Use working Odyssey values");
     private readonly Button clearDefault = MakeButton("Clear default monitor");
     private readonly CheckBox confirmSwitch = new()
     {
@@ -37,6 +35,15 @@ internal sealed class MainForm : Form
     private readonly Label status = new()
     {
         AutoSize = true, Visible = false, ForeColor = Color.FromArgb(90, 103, 122)
+    };
+    private readonly Label errorStatus = new()
+    {
+        AutoSize = true, Dock = DockStyle.Top, ForeColor = Color.FromArgb(150, 45, 35),
+        AccessibleName = "Latest application error"
+    };
+    private readonly TableLayoutPanel errorPanel = new()
+    {
+        AutoSize = true, Dock = DockStyle.Top, ColumnCount = 1, Visible = false
     };
     private readonly Label defaultLabel = new() { AutoSize = true, ForeColor = Color.FromArgb(90, 103, 122) };
     private readonly Label settingsMonitor = new() { AutoSize = true, Dock = DockStyle.Fill };
@@ -74,9 +81,12 @@ internal sealed class MainForm : Form
     private NativeMonitor? profileMonitor;
     private string? profileIdentity;
     private bool profileStoreAvailable = true;
+    private bool preferencesStoreAvailable = true;
     private bool profileEditorReady;
-    private bool setupPending;
-    private static string ProfilesPath => Path.Combine(SettingsDirectory, "monitor-profiles.json");
+    private bool defaultSetupPending;
+    private readonly Dictionary<NativeMonitor, MonitorProfileDiscovery> connectionProfiles = [];
+    private readonly HashSet<string> offeredMonitors = new(StringComparer.OrdinalIgnoreCase);
+    private string ProfilesPath => Path.Combine(SettingsDirectory, "monitor-profiles.json");
     private readonly ToolStripMenuItem trayAllInputsHidden = new("All inputs hidden - Settings > Inputs...")
     {
         Enabled = false, Visible = false
@@ -110,19 +120,21 @@ internal sealed class MainForm : Form
     private bool positioningWindow;
     private bool hasUserPlacement;
     private int displayGeneration;
-    private static string SettingsDirectory => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "OdysseyInputSwitcher");
-    private static string SettingsPath => Path.Combine(SettingsDirectory, "inputs.json");
-    private static string PreferencesPath => Path.Combine(SettingsDirectory, "preferences.json");
-    private static string InputNamesPath => Path.Combine(SettingsDirectory, "input-names.json");
-    private static string InputVisibilityPath => Path.Combine(SettingsDirectory, "input-visibility.json");
+    private string SettingsDirectory { get; }
+    private string SettingsPath => Path.Combine(SettingsDirectory, "inputs.json");
+    private string PreferencesPath => Path.Combine(SettingsDirectory, "preferences.json");
+    private string InputNamesPath => Path.Combine(SettingsDirectory, "input-names.json");
+    private string InputVisibilityPath => Path.Combine(SettingsDirectory, "input-visibility.json");
     private NativeMonitor? SelectedMonitor => !stale ? monitors.SelectedItem as NativeMonitor : null;
     internal event EventHandler? InitializationCompleted;
 
     internal MainForm(bool startInTray = false, TimeProvider? clock = null,
-        Func<ReleaseUpdater>? updaterFactory = null, string? windowPositionPath = null)
+        Func<ReleaseUpdater>? updaterFactory = null, string? windowPositionPath = null,
+        string? settingsDirectory = null)
     {
         this.startInTray = startInTray;
+        SettingsDirectory = settingsDirectory ?? Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "OdysseyInputSwitcher");
         this.windowPositionPath = windowPositionPath ?? Path.Combine(SettingsDirectory, "window-position.json");
         updateSchedule = new UpdateCheckSchedule(clock ?? TimeProvider.System);
         createUpdater = updaterFactory ?? (() => new ReleaseUpdater());
@@ -164,7 +176,6 @@ internal sealed class MainForm : Form
         saveDefault.Click += (_, _) => SaveDefault();
         clearDefault.Click += (_, _) => SaveDefault(clear: true);
         diagnostics.Click += async (_, _) => await DiagnosticsAsync();
-        save.Click += (_, _) => SaveSettings();
         confirmSwitch.CheckedChanged += (_, _) => SaveConfirmationPreference();
         runAtStartup.Click += (_, _) =>
         {
@@ -182,20 +193,9 @@ internal sealed class MainForm : Form
                 ReportSettingsFailure(error);
             }
         };
-        restore.Click += (_, _) =>
-        {
-            if (activeProfile is not null)
-            {
-                UseLegacyProfile(usePreset: true);
-                return;
-            }
-            ApplySettings(InputSettings.Resolve(null));
-            Append("Restored working profile: DisplayPort 0x0F, HDMI 0x05, Micro HDMI 0x06.");
-            SetStatus("Working input values restored. Save to keep them.");
-        };
         refreshTimer.Tick += async (_, _) =>
         {
-            if (busy || exiting)
+            if (busy || confirming || exiting)
                 return;
             refreshTimer.Stop();
             refreshPending = false;
@@ -398,8 +398,8 @@ internal sealed class MainForm : Form
             RefreshStartupSetting();
             InitializationCompleted?.Invoke(this, EventArgs.Empty);
             updateTimer.Start();
+            await RefreshAsync();
             await CheckForUpdatesAsync(manual: false);
-            QueueRefresh("Startup");
         });
     }
 
@@ -435,11 +435,11 @@ internal sealed class MainForm : Form
         var layout = new TableLayoutPanel
         {
             Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            Padding = new Padding(14), ColumnCount = 1, RowCount = 6
+            Padding = new Padding(14), ColumnCount = 1, RowCount = 7
         };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         AutoScroll = true;
-        for (int i = 0; i < 6; i++)
+        for (int i = 0; i < 7; i++)
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.Controls.Add(new Label
         {
@@ -495,6 +495,19 @@ internal sealed class MainForm : Form
         status.Dock = DockStyle.Fill;
         status.Margin = new Padding(0, 6, 0, 0);
         layout.Controls.Add(status, 0, 5);
+        errorPanel.Controls.Add(errorStatus, 0, 0);
+        var errorActions = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top };
+        var details = MakeButton("Details...");
+        DescribeButton(details, "Open Diagnostics to see the technical details of the error.");
+        details.Click += (_, _) => ShowAdvanced(2);
+        var dismiss = MakeButton("Dismiss");
+        DescribeButton(dismiss, "Hide this error message. Technical details remain in Diagnostics.");
+        dismiss.Click += (_, _) => errorPanel.Visible = false;
+        errorActions.Controls.AddRange([details, dismiss]);
+        errorPanel.Controls.Add(errorActions, 0, 1);
+        errorPanel.Layout += (_, _) =>
+            errorStatus.MaximumSize = new Size(Math.Max(1, layout.ClientSize.Width - layout.Padding.Horizontal), 0);
+        layout.Controls.Add(errorPanel, 0, 6);
         Controls.Add(layout);
         menuBar.Font = Font;
         menuBar.Items.Add(settingsMenu);
@@ -557,10 +570,6 @@ internal sealed class MainForm : Form
         {
             BackColor = Canvas, Padding = new Padding(12)
         };
-        var settingsTab = new TabPage("Input values")
-        {
-            BackColor = Canvas, Padding = new Padding(12)
-        };
         var diagnosticLayout = new TableLayoutPanel
         {
             Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
@@ -580,38 +589,11 @@ internal sealed class MainForm : Form
         diagnosticLayout.Controls.Add(log, 0, 2);
         diagnosticTab.Controls.Add(diagnosticLayout);
 
-        var settingsLayout = new TableLayoutPanel
-        {
-            Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            ColumnCount = 2, RowCount = 5
-        };
-        settingsLayout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        settingsLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        var explanation = new Label
-        {
-            Text = "VCP 0x60 input values (decimal or 0x hex).\r\n" +
-                "Working Odyssey profile: DisplayPort 0x0F, HDMI 0x05, Micro HDMI 0x06.\r\n" +
-                "Changing these settings does not send monitor commands.",
-            AutoSize = true, Dock = DockStyle.Fill, Margin = new Padding(3, 0, 3, 12)
-        };
-        settingsLayout.Controls.Add(explanation, 0, 0);
-        settingsLayout.SetColumnSpan(explanation, 2);
         for (int i = 0; i < inputNames.Length; i++)
         {
             values[i] = new TextBox { Dock = DockStyle.Fill, AccessibleName = inputNames[i] + " write value" };
             values[i].TextChanged += (_, _) => UpdateControls();
-            settingsLayout.Controls.Add(new Label
-            {
-                Text = inputNames[i], AutoSize = true, Margin = new Padding(3, 6, 18, 10)
-            }, 0, i + 1);
-            settingsLayout.Controls.Add(values[i], 1, i + 1);
         }
-        var actions = MakeSettingsActions();
-        AddSettingsAction(actions, restore, "Fill in the tested Odyssey values. Choose Save input values to keep them.");
-        AddSettingsAction(actions, save, "Save these command values for future switches. Does not switch inputs.");
-        settingsLayout.Controls.Add(actions, 0, 4);
-        settingsLayout.SetColumnSpan(actions, 2);
-        settingsTab.Controls.Add(settingsLayout);
 
         var generalTab = new TabPage("General")
         {
@@ -704,7 +686,6 @@ internal sealed class MainForm : Form
         settingsTabs.TabPages.Add(namesTab);
         var advancedTab = new TabPage("Advanced") { BackColor = Canvas };
         var advancedTabs = new TabControl { Dock = DockStyle.Fill, Padding = new Point(10, 4) };
-        advancedTabs.TabPages.Add(settingsTab);
         advancedTabs.TabPages.Add(diagnosticTab);
         advancedTab.Controls.Add(advancedTabs);
         settingsTabs.TabPages.Add(advancedTab);
@@ -815,7 +796,7 @@ internal sealed class MainForm : Form
         RestoreWindowPosition();
         Show();
         Activate();
-        PresentProfileSetup();
+        PresentMonitorSetup();
     }
 
     private void ShowAdvanced(int tab = 0)
@@ -874,13 +855,7 @@ internal sealed class MainForm : Form
 
     private void ReportSettingsFailure(Exception error)
     {
-        Append("Settings failed: " + error);
-        SetStatus("Settings could not be updated.");
-        if (startInTray)
-            tray.ShowBalloonTip(5000, AppName + " settings failed", error.Message, ToolTipIcon.Error);
-        else
-            MessageBox.Show(advanced.Visible ? advanced : this, error.Message,
-                AppName + " settings failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        ReportError(error, ErrorContext.Settings, "Settings failed");
     }
 
     private void ExitApplication()
@@ -904,7 +879,6 @@ internal sealed class MainForm : Form
         settingsUpdate.Enabled = !busy && !confirming && !exiting && !checkingForUpdates;
         runAtStartup.Enabled = !busy && !exiting;
         diagnostics.Enabled = selected;
-        save.Enabled = restore.Enabled = !busy && !exiting && (activeProfile is null || monitor is not null);
         profileGrid.Enabled = !busy && !confirming && !exiting && monitor is not null;
         if (profileEditorReady)
             foreach (var button in settingsTabs.TabPages[1].Controls.OfType<TableLayoutPanel>()
@@ -973,10 +947,8 @@ internal sealed class MainForm : Form
         {
             if (!resourcesDisposed)
             {
-                Append("Automatic update check failed: " + error);
                 if (!exiting)
-                    tray.ShowBalloonTip(5000, "Update check failed",
-                        error.Message + " Use Check for updates to retry.", ToolTipIcon.Warning);
+                    ReportError(error, ErrorContext.Update, "Automatic update check failed", showDialog: false);
             }
         }
         finally
@@ -1066,17 +1038,9 @@ internal sealed class MainForm : Form
             }
             catch (Exception error)
             {
-                Append("Update failed: " + error);
                 SetStatus("Update failed. Your installed version has not been changed.");
                 if (!exiting)
-                {
-                    if (manual || approved)
-                        MessageBox.Show(this, error.Message, AppName + " update failed",
-                            MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    else
-                        tray.ShowBalloonTip(5000, "Update check failed",
-                            error.Message + " Use Check for updates to retry.", ToolTipIcon.Warning);
-                }
+                    ReportError(error, ErrorContext.Update, "Update failed", manual || approved);
             }
             finally
             {
@@ -1085,10 +1049,8 @@ internal sealed class MainForm : Form
                     try { Directory.Delete(stagedDirectory, recursive: true); }
                     catch (Exception error) when (error is IOException or UnauthorizedAccessException)
                     {
-                        Append("Update staging cleanup failed: " + error);
                         if (!exiting)
-                            MessageBox.Show(this, "Temporary update files could not be removed:\r\n" + error.Message,
-                                AppName + " update cleanup failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                            ReportError(error, ErrorContext.Cleanup, "Update staging cleanup failed");
                     }
                 }
             }
@@ -1103,13 +1065,18 @@ internal sealed class MainForm : Form
 
     private void ReportFailure(Exception error, bool showDialog = true)
     {
-        SetStatus("Operation failed. Open Settings > Advanced > Diagnostics for details.");
-        Append(error.ToString());
-        tray.ShowBalloonTip(5000, AppName + " operation failed", error.Message, ToolTipIcon.Error);
-        if (showDialog && !startInTray)
-            MessageBox.Show(advanced.Visible ? advanced : Visible ? this : null, error.Message +
-                "\r\n\r\nSee Settings > Advanced > Diagnostics for details. The DDC/CI connection may be unavailable.",
-                AppName, MessageBoxButtons.OK, MessageBoxIcon.Error);
+        ReportError(error, ErrorContext.Monitor, "Monitor operation failed", showDialog);
+    }
+
+    internal void ReportError(Exception error, ErrorContext context, string diagnosticContext,
+        bool showDialog = true)
+    {
+        Append(diagnosticContext + ": " + error);
+        errorStatus.Text = AppErrors.Describe(error, context) + "\r\nDetails are available in Settings > Advanced > Diagnostics.";
+        errorPanel.Visible = true;
+        if (showDialog && !startInTray && (Visible || advanced.Visible))
+            MessageBox.Show(advanced.Visible ? advanced : this, errorStatus.Text,
+                AppName, MessageBoxButtons.OK, MessageBoxIcon.Warning);
     }
 
     private async Task RunAsync(Func<Task> operation, bool showErrors = true)
@@ -1153,6 +1120,8 @@ internal sealed class MainForm : Form
 
     private void ReleaseInventory(bool logMessages = true)
     {
+        connectionProfiles.Clear();
+        profileMonitor = null;
         monitors.Items.Clear();
         if (inventory is null)
             return;
@@ -1185,12 +1154,54 @@ internal sealed class MainForm : Form
             monitors.Items.Add(monitor);
             Append($"{monitor.Description}\r\nMonitor interface: {monitor.StableId ?? "unavailable"}");
         }
+        var connected = inventory.Monitors.ToArray();
+        var identities = CurrentIdentities();
+        var discovered = await Task.Run(() => connected.Select((monitor, index) =>
+            MonitorProfiles.GetOrDiscover(monitor, UniqueIdentity(monitor, index, identities), profiles)).ToArray());
+        if (exiting || generation != displayGeneration)
+        {
+            QueueRefresh("Displays changed during input discovery");
+            return;
+        }
+        var updatedProfiles = new Dictionary<string, MonitorProfile>(profiles, StringComparer.OrdinalIgnoreCase);
+        bool newMonitor = false;
+        for (int index = 0; index < connected.Length; index++)
+        {
+            var monitor = connected[index];
+            var discovery = discovered[index];
+            connectionProfiles[monitor] = discovery;
+            string? identity = UniqueIdentity(monitor, index, identities);
+            string offerKey = identity ?? monitor.DisplayName;
+            if (!discovery.Remembered && !offeredMonitors.Contains(offerKey))
+                newMonitor = true;
+            if (discovery.Error is not null)
+                Append("Input discovery unavailable for " + monitor.Description + ": " + discovery.Error);
+            else if (!discovery.Remembered && identity is not null)
+                updatedProfiles[identity] = discovery.Profile;
+        }
+        if (updatedProfiles.Count != profiles.Count && profileStoreAvailable)
+        {
+            try
+            {
+                WriteSettings(ProfilesPath, updatedProfiles);
+                profiles = updatedProfiles;
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                ReportSettingsFailure(error);
+            }
+        }
+        defaultSetupPending = connected.Length != 0 && preferences.DefaultMonitorId is null &&
+            (defaultSetupPending || !preferences.MonitorSetupCompleted || newMonitor);
         monitors.SelectedIndex = MonitorSelection.Choose(CurrentIdentities(), preferences.DefaultMonitorId);
         SetSelectionStatus();
         Append($"Enumerated {inventory.Monitors.Count} physical monitor(s). No input commands sent.");
         }, showErrors: false);
         if (!exiting && !stale)
+        {
             await PrepareMonitorProfileAsync();
+            PresentMonitorSetup();
+        }
     }
 
     private void SetSelectionStatus()
@@ -1203,63 +1214,93 @@ internal sealed class MainForm : Form
     private string ConfiguredValue(int index) =>
         activeProfile is null ? values[index].Text : activeProfile.Inputs[index].Value;
 
-    private async Task PrepareMonitorProfileAsync()
+    private static string? UniqueIdentity(NativeMonitor monitor, int index, IReadOnlyList<string?> identities) =>
+        monitor.StableId is not null && MonitorSelection.FindUnique(identities, monitor.StableId) == index
+            ? monitor.StableId : null;
+
+    private Task PrepareMonitorProfileAsync()
     {
         NativeMonitor? selected = SelectedMonitor;
         if (selected is null || selected == profileMonitor || busy || confirming || exiting)
-            return;
-        string? identity = selected.StableId is not null &&
-            MonitorSelection.FindUnique(CurrentIdentities(), selected.StableId) == monitors.SelectedIndex
-            ? selected.StableId : null;
-        RenderMonitorProfile(new MonitorProfile(), identity, selected);
-        if (identity is not null && profiles.TryGetValue(identity, out var saved))
+            return Task.CompletedTask;
+        string? identity = UniqueIdentity(selected, monitors.SelectedIndex, CurrentIdentities());
+        var profile = identity is not null && profiles.TryGetValue(identity, out var saved)
+            ? saved : connectionProfiles.TryGetValue(selected, out var discovery)
+                ? discovery.Profile : new MonitorProfile();
+        RenderMonitorProfile(profile, identity, selected);
+        if (profile.Inputs.Count == 0)
         {
-            RenderMonitorProfile(saved, identity, selected);
-            return;
+            profileExplanation.Text = "We couldn't find input settings for this monitor. Add input names and values from " +
+                "its documentation or a known-working configuration, then choose Save monitor inputs.\r\n" +
+                "Don't guess input values. Details are available in Diagnostics.";
+            SetStatus("This monitor needs input settings. Open Settings > Inputs... to add them.");
         }
-        int generation = displayGeneration;
-        MonitorProfile discovered = new();
-        string explanation = "Review the advertised inputs below, correct them if necessary, and choose Save monitor inputs.\r\n" +
-            "Advertised values are not proof of working input switching. No input commands were sent.";
-        await RunAsync(async () =>
-        {
-            SetStatus("Reading this monitor's input-source capabilities...");
-            try
-            {
-                discovered = await Task.Run(() => MonitorProfiles.Discover(selected));
-                Append("Read advertised input-source values for " + selected.Description + ". No input commands sent.");
-            }
-            catch (Exception error) when (error is Win32Exception or InvalidOperationException)
-            {
-                explanation = "Input discovery was unavailable: " + error.Message + "\r\n" +
-                    "Add input names and VCP 0x60 values from your monitor's documentation or a known-working configuration, " +
-                    "then choose Save monitor inputs. Do not guess or brute-force values.";
-                Append("Input discovery failed for " + selected.Description + ": " + error);
-            }
-        }, showErrors: false);
-        if (exiting || stale || generation != displayGeneration || SelectedMonitor != selected)
-            return;
-        RenderMonitorProfile(discovered, identity, selected);
-        profileExplanation.Text = explanation + (identity is null
-            ? "\r\nThis monitor has no unique Windows identity. Configuration can only be used for this connection."
-            : "");
-        setupPending = true;
-        SetStatus("Configure this monitor in Settings > Inputs... before switching.");
-        PresentProfileSetup();
+        return Task.CompletedTask;
     }
 
-    private void PresentProfileSetup()
+    private void PresentMonitorSetup()
     {
-        if (!setupPending || busy || confirming || exiting || SelectedMonitor != profileMonitor)
+        if (!defaultSetupPending || busy || confirming || exiting || stale || inventory is null ||
+            preferences.DefaultMonitorId is not null || !Visible || startInTray)
             return;
-        if (!Visible || startInTray)
+        int generation = displayGeneration;
+        var connected = inventory.Monitors.ToArray();
+        var identities = CurrentIdentities();
+        var options = connected.Select((monitor, index) => new MonitorSetupOption(monitor.DisplayName,
+            UniqueIdentity(monitor, index, identities), connectionProfiles[monitor])).ToArray();
+        confirming = true;
+        UpdateControls();
+        DialogResult answer;
+        int selectedIndex;
+        using (var dialog = new MonitorSetupDialog(options, Font, Icon))
         {
-            tray.ShowBalloonTip(5000, "Monitor input setup needed",
-                "Double-click the tray icon and open Settings > Inputs to configure this monitor.", ToolTipIcon.Info);
-            return;
+            try
+            {
+                answer = dialog.ShowDialog(this);
+                selectedIndex = dialog.SelectedMonitorIndex;
+            }
+            finally
+            {
+                confirming = false;
+                UpdateControls();
+                if (closeWhenIdle)
+                    Close();
+            }
         }
-        setupPending = false;
-        ShowAdvanced(1);
+        if (exiting || stale || generation != displayGeneration)
+            return;
+        CompleteMonitorSetup(options, answer, selectedIndex);
+    }
+
+    internal void CompleteMonitorSetup(IReadOnlyList<MonitorSetupOption> options, DialogResult answer,
+        int selectedIndex)
+    {
+        defaultSetupPending = false;
+        foreach (var option in options)
+            offeredMonitors.Add(option.Identity ?? option.Name);
+        try
+        {
+            var updated = new Preferences
+            {
+                DefaultMonitorId = preferences.DefaultMonitorId,
+                SuppressSwitchConfirmation = preferences.SuppressSwitchConfirmation,
+                MonitorSetupCompleted = true
+            };
+            WritePreferences(updated);
+            preferences = updated;
+            if (selectedIndex >= 0 && answer is DialogResult.OK or DialogResult.Retry)
+            {
+                monitors.SelectedIndex = selectedIndex;
+                if (answer == DialogResult.OK)
+                    SaveDefault();
+                else
+                    ShowAdvanced(1);
+            }
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            ReportSettingsFailure(error);
+        }
     }
 
     internal void RenderMonitorProfile(MonitorProfile profile, string? identity, NativeMonitor? monitor)
@@ -1268,7 +1309,6 @@ internal sealed class MainForm : Form
         activeProfile = profile;
         profileMonitor = monitor;
         profileIdentity = identity;
-        setupPending = false;
         BuildProfileEditor();
         mainInputs.SuspendLayout();
         try
@@ -1384,17 +1424,6 @@ internal sealed class MainForm : Form
             "Only for the tested Odyssey setup: fill DisplayPort 0x0F, HDMI 0x05 and Micro HDMI 0x06. Save to keep them.");
         panel.Controls.Add(actions, 0, 2);
         namesPage.Controls.Add(panel);
-        var technical = settingsTabs.TabPages[2].Controls.OfType<TabControl>().Single().TabPages[0];
-        foreach (Control control in technical.Controls.Cast<Control>().ToArray())
-            control.Dispose();
-        var guidance = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1 };
-        guidance.Controls.Add(new Label
-        {
-            Text = "Input names, values and visibility are configured together in Settings > Inputs...\r\n" +
-                "Capabilities may be incomplete or incorrect. Editing settings never sends input commands.",
-            AutoSize = true, Dock = DockStyle.Top
-        });
-        technical.Controls.Add(guidance);
     }
 
     private void UseLegacyProfile(bool usePreset)
@@ -1445,6 +1474,8 @@ internal sealed class MainForm : Form
                 profiles = updated;
             }
             RenderMonitorProfile(edited, profileIdentity, profileMonitor);
+            if (profileMonitor is not null)
+                connectionProfiles[profileMonitor] = new(edited, true, null);
             SetStatus(profileIdentity is null
                 ? "Input configuration applied for this connection only; no unique monitor identity is available."
                 : "Monitor inputs saved.");
@@ -1518,9 +1549,10 @@ internal sealed class MainForm : Form
                     var updated = new Preferences
                     {
                         DefaultMonitorId = preferences.DefaultMonitorId,
-                        SuppressSwitchConfirmation = confirmation.SuppressFuture
+                        SuppressSwitchConfirmation = confirmation.SuppressFuture,
+                        MonitorSetupCompleted = preferences.MonitorSetupCompleted
                     };
-                    WriteSettings(PreferencesPath, updated);
+                    WritePreferences(updated);
                     preferences = updated;
                     Append("Saved input confirmation preference.");
                 }
@@ -1528,7 +1560,7 @@ internal sealed class MainForm : Form
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {
-            ReportFailure(error);
+            ReportSettingsFailure(error);
             return;
         }
         finally
@@ -1692,7 +1724,7 @@ internal sealed class MainForm : Form
         {
             foreach (var field in values)
                 field.Clear();
-            ReportFailure(error);
+            ReportSettingsFailure(error);
         }
     }
 
@@ -1834,7 +1866,8 @@ internal sealed class MainForm : Form
             JsonException or InvalidOperationException)
         {
             preferences = new Preferences();
-            ReportFailure(error);
+            preferencesStoreAvailable = false;
+            ReportSettingsFailure(error);
         }
         finally
         {
@@ -1864,6 +1897,14 @@ internal sealed class MainForm : Form
         }
     }
 
+    private void WritePreferences(Preferences updated)
+    {
+        if (!preferencesStoreAvailable)
+            throw new InvalidOperationException(
+                "Saved preferences could not be loaded. Back up and repair preferences.json before saving.");
+        WriteSettings(PreferencesPath, updated);
+    }
+
     private void SaveDefault(bool clear = false)
     {
         try
@@ -1880,9 +1921,10 @@ internal sealed class MainForm : Form
             var updated = new Preferences
             {
                 DefaultMonitorId = identity,
-                SuppressSwitchConfirmation = preferences.SuppressSwitchConfirmation
+                SuppressSwitchConfirmation = preferences.SuppressSwitchConfirmation,
+                MonitorSetupCompleted = preferences.MonitorSetupCompleted
             };
-            WriteSettings(PreferencesPath, updated);
+            WritePreferences(updated);
             preferences = updated;
             Append(clear ? "Cleared the default monitor." : "Saved default monitor interface: " + identity);
             SetStatus(clear ? "Default monitor cleared." : "Default monitor saved.");
@@ -1890,34 +1932,7 @@ internal sealed class MainForm : Form
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
-            ReportFailure(error);
-        }
-    }
-
-    private void SaveSettings()
-    {
-        if (activeProfile is not null)
-        {
-            SaveMonitorProfile();
-            return;
-        }
-        try
-        {
-            var stored = new Dictionary<string, string>();
-            for (int i = 0; i < values.Length; i++)
-            {
-                string text = values[i].Text.Trim();
-                if (text.Length != 0 && !InputValue.TryParse(text, out _))
-                    throw new InvalidOperationException($"{inputNames[i]} needs a value from 0 to 65535, decimal or 0x hex.");
-                stored[inputNames[i]] = text;
-            }
-            WriteSettings(SettingsPath, stored);
-            Append("Saved input values to " + SettingsPath);
-            SetStatus("Input values saved.");
-        }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException)
-        {
-            ReportFailure(error);
+            ReportSettingsFailure(error);
         }
     }
 
@@ -1930,9 +1945,10 @@ internal sealed class MainForm : Form
             var updated = new Preferences
             {
                 DefaultMonitorId = preferences.DefaultMonitorId,
-                SuppressSwitchConfirmation = !confirmSwitch.Checked
+                SuppressSwitchConfirmation = !confirmSwitch.Checked,
+                MonitorSetupCompleted = preferences.MonitorSetupCompleted
             };
-            WriteSettings(PreferencesPath, updated);
+            WritePreferences(updated);
             preferences = updated;
             Append(confirmSwitch.Checked
                 ? "Enabled input switch confirmations."
@@ -1941,7 +1957,7 @@ internal sealed class MainForm : Form
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {
             confirmSwitch.Checked = !preferences.SuppressSwitchConfirmation;
-            ReportFailure(error);
+            ReportSettingsFailure(error);
         }
     }
 
@@ -1960,6 +1976,8 @@ internal sealed class MainForm : Form
             tray.Dispose();
             trayMenu.Dispose();
             advanced.Dispose();
+            foreach (var value in values)
+                value.Dispose();
             buttonHelp.Dispose();
             Icon?.Dispose();
         }

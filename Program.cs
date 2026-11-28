@@ -29,9 +29,14 @@ internal static class Program
             }
             catch (Exception error)
             {
-                MessageBox.Show(error.Message + "\r\n\r\nIf installation failed, the previous executable is retained. " +
-                    "You can download a release manually from " + ReleaseUpdater.RepositoryUrl + "/releases/latest.",
-                    MainForm.AppName + " update failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                System.Diagnostics.Trace.TraceError("Update startup failed: {0}", error);
+                if (MessageBox.Show("We couldn't start or complete the update.\r\n\r\nIf installation failed, the previous executable is retained. " +
+                    "You can download a release manually from " + ReleaseUpdater.RepositoryUrl + "/releases/latest." +
+                    "\r\n\r\nWould you like to see the technical details?",
+                    MainForm.AppName + " update failed", MessageBoxButtons.YesNo, MessageBoxIcon.Warning,
+                    MessageBoxDefaultButton.Button2) == DialogResult.Yes)
+                    MessageBox.Show(error.ToString(), MainForm.AppName + " technical details",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
                 if (args[0] != "--cleanup-update")
                     return;
             }
@@ -48,8 +53,7 @@ internal static class Program
                 }
                 catch (Exception error)
                 {
-                    MessageBox.Show(form, error.Message, MainForm.AppName + " update cleanup failed",
-                        MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    form.ReportError(error, ErrorContext.Cleanup, "Update cleanup failed");
                 }
             };
         }

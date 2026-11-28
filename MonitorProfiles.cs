@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.ComponentModel;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -17,8 +18,22 @@ internal sealed class MonitorProfile
     public List<MonitorInput> Inputs { get; set; } = [];
 }
 
+internal sealed record MonitorProfileDiscovery(MonitorProfile Profile, bool Remembered, Exception? Error);
+
 internal static class MonitorProfiles
 {
+    internal static MonitorProfileDiscovery GetOrDiscover(IMonitorConnection monitor, string? identity,
+        IReadOnlyDictionary<string, MonitorProfile> profiles)
+    {
+        if (identity is not null && profiles.TryGetValue(identity, out var saved))
+            return new(saved, true, null);
+        try { return new(Discover(monitor), false, null); }
+        catch (Exception error) when (error is Win32Exception or InvalidOperationException)
+        {
+            return new(new MonitorProfile(), false, error);
+        }
+    }
+
     internal static MonitorProfile Discover(IMonitorConnection monitor) =>
         FromCapabilities(monitor.ReadCapabilities());
 
