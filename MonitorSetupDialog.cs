@@ -12,14 +12,8 @@ internal sealed class MonitorSetupDialog : Form
         DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Top,
         AccessibleName = "Choose your default monitor"
     };
-    internal Button SaveDefault { get; } = new()
-    {
-        Text = "Use as default", AutoSize = true, Enabled = false, DialogResult = DialogResult.OK
-    };
-    internal Button ConfigureInputs { get; } = new()
-    {
-        Text = "Edit inputs...", AutoSize = true, Enabled = false, DialogResult = DialogResult.Retry
-    };
+    internal Button SaveDefault { get; } = MainForm.MakeButton("Use as default", primary: true);
+    internal Button ConfigureInputs { get; } = MainForm.MakeButton("Edit inputs...");
     internal Label InputSummary { get; } = new() { AutoSize = true, Dock = DockStyle.Top };
     internal int SelectedMonitorIndex => MonitorChoice.SelectedIndex;
 
@@ -29,6 +23,12 @@ internal sealed class MonitorSetupDialog : Form
         Font = font;
         Icon = icon;
         BackColor = Color.White;
+        ForeColor = MainForm.Ink;
+        SaveDefault.Enabled = ConfigureInputs.Enabled = false;
+        SaveDefault.DialogResult = DialogResult.OK;
+        ConfigureInputs.DialogResult = DialogResult.Retry;
+        SaveDefault.AccessibleName = "Save selected monitor as default";
+        ConfigureInputs.AccessibleName = "Configure selected monitor inputs";
         AutoScaleMode = AutoScaleMode.Dpi;
         AutoSize = true;
         AutoSizeMode = AutoSizeMode.GrowAndShrink;
@@ -53,7 +53,8 @@ internal sealed class MonitorSetupDialog : Form
         InputSummary.Text = "Choose a monitor above to see its inputs. You can also set a default later in Settings > General.";
         content.Controls.Add(InputSummary, 0, 2);
         var actions = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true };
-        var skip = new Button { Text = "Not now", AutoSize = true, DialogResult = DialogResult.Cancel };
+        var skip = MainForm.MakeButton("Not now");
+        skip.DialogResult = DialogResult.Cancel;
         actions.Controls.AddRange([SaveDefault, ConfigureInputs, skip]);
         content.Controls.Add(actions, 0, 3);
         Controls.Add(content);

@@ -880,6 +880,23 @@ var layoutThread = new Thread(() =>
             !string.IsNullOrWhiteSpace(button.AccessibleDescription) &&
             help.GetToolTip(button) == button.AccessibleDescription),
             "Every main and settings button has accessible hover help");
+        double Luminance(System.Drawing.Color color)
+        {
+            double Channel(byte component)
+            {
+                double value = component / 255d;
+                return value <= 0.04045 ? value / 12.92 : Math.Pow((value + 0.055) / 1.055, 2.4);
+            }
+            return 0.2126 * Channel(color.R) + 0.7152 * Channel(color.G) + 0.0722 * Channel(color.B);
+        }
+        Check(Descendants(main).Concat(Descendants(advanced)).OfType<Button>().All(button =>
+        {
+            double foreground = Luminance(button.ForeColor);
+            double background = Luminance(button.BackColor);
+            return (Math.Max(foreground, background) + 0.05) /
+                (Math.Min(foreground, background) + 0.05) >= 4.5 &&
+                button.TabStop && !string.IsNullOrWhiteSpace(button.AccessibilityObject.Name);
+        }), "Styled main and settings actions retain keyboard access, meaningful names, and 4.5:1 text contrast");
         Check(Descendants(advanced).OfType<Button>().All(button =>
             button.Parent!.Controls.OfType<Label>().Any(label => label.Text == button.AccessibleDescription)),
             "Every settings button has an always-visible description");
@@ -1209,6 +1226,22 @@ var layoutThread = new Thread(() =>
                 main.Font = originalFont;
                 advanced.Font = originalFont;
             }
+        }
+        using (var errorFont = new System.Drawing.Font(main.Font.FontFamily, 18))
+        {
+            main.Font = errorFont;
+            main.ReportError(new IOException("Detailed local failure"), ErrorContext.Monitor,
+                "Visual regression", showDialog: false);
+            main.PerformLayout();
+            var errorLabel = (Label)typeof(MainForm).GetField("errorStatus",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(main)!;
+            Check(errorLabel.Right <= errorLabel.Parent!.ClientSize.Width &&
+                errorLabel.Height >= errorLabel.GetPreferredSize(new System.Drawing.Size(errorLabel.Width, 0)).Height &&
+                main.Height <= Screen.FromControl(main).WorkingArea.Height &&
+                (main.Controls.OfType<TableLayoutPanel>().Single().Bottom <= main.ClientSize.Height ||
+                    main.VerticalScroll.Visible),
+                "Friendly error panel wraps without clipping and the main window scrolls within the display at large fonts");
+            main.Font = originalFont;
         }
     }
     catch (Exception error) { layoutError = error; }

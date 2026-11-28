@@ -8,13 +8,15 @@ namespace OdysseyInputSwitcher;
 internal sealed class MainForm : Form
 {
     internal const string AppName = "Connected Display Input Selector";
-    private static readonly Color Canvas = Color.FromArgb(245, 247, 251);
-    private static readonly Color Ink = Color.FromArgb(28, 39, 58);
-    private static readonly Color Accent = Color.FromArgb(36, 91, 219);
+    internal static readonly Color Canvas = Color.FromArgb(242, 245, 250);
+    internal static readonly Color Ink = Color.FromArgb(24, 37, 58);
+    internal static readonly Color Accent = Color.FromArgb(30, 82, 190);
+    private static readonly Color Outline = Color.FromArgb(194, 205, 222);
     private readonly ComboBox monitors = new()
     {
         DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill,
-        AccessibleName = "Monitor", DropDownWidth = 650
+        AccessibleName = "Monitor", DropDownWidth = 650, BackColor = Color.White, ForeColor = Ink,
+        FlatStyle = FlatStyle.Standard
     };
     private readonly Button refresh = MakeButton("Refresh");
     private readonly Button saveDefault = MakeButton("Save selected monitor as default");
@@ -22,7 +24,10 @@ internal sealed class MainForm : Form
     private readonly ToolStripMenuItem settingsMenu = new("&Settings");
     private readonly CheckBox runAtStartup = new() { Text = "Run at Windows startup", AutoSize = true };
     private readonly ToolStripMenuItem settingsUpdate = new("Check for updates...");
-    private readonly TabControl settingsTabs = new() { Dock = DockStyle.Fill, Padding = new Point(10, 4) };
+    private readonly TabControl settingsTabs = new()
+    {
+        Dock = DockStyle.Fill, Padding = new Point(14, 7), AccessibleName = "Settings sections"
+    };
     private readonly ToolTip buttonHelp = new() { AutoPopDelay = 15000 };
     private bool settingsReady;
     private bool sizingSettings;
@@ -72,7 +77,9 @@ internal sealed class MainForm : Form
     {
         Dock = DockStyle.Top, Height = 180, AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
         AllowUserToAddRows = true, AllowUserToDeleteRows = true, RowHeadersVisible = true,
-        AccessibleName = "Selected monitor input configuration"
+        AccessibleName = "Selected monitor input configuration",
+        BackgroundColor = Color.White, BorderStyle = BorderStyle.FixedSingle,
+        GridColor = Outline, EnableHeadersVisualStyles = false
     };
     private readonly Label profileExplanation = new() { AutoSize = true, Dock = DockStyle.Fill };
     private Dictionary<string, MonitorProfile> profiles = new(StringComparer.OrdinalIgnoreCase);
@@ -244,13 +251,17 @@ internal sealed class MainForm : Form
         UpdateControls();
     }
 
-    private static Button MakeButton(string text, bool primary = false) => new()
+    internal static Button MakeButton(string text, bool primary = false) => new()
     {
-        Text = text, AutoSize = true, FlatStyle = FlatStyle.Flat,
+        Text = text, AccessibleName = text.Replace("&", ""), AutoSize = true, FlatStyle = FlatStyle.Flat,
         BackColor = primary ? Accent : Color.White, ForeColor = primary ? Color.White : Ink,
-        Padding = new Padding(8, 3, 8, 3), Cursor = Cursors.Hand,
-        FlatAppearance = { BorderSize = 0, MouseOverBackColor = primary
-            ? Color.FromArgb(24, 72, 184) : Color.FromArgb(230, 236, 247) }
+        Padding = primary ? new Padding(8, 3, 8, 3) : new Padding(12, 5, 12, 5), Cursor = Cursors.Hand,
+        FlatAppearance =
+        {
+            BorderSize = 1, BorderColor = primary ? Accent : Outline,
+            MouseOverBackColor = primary ? Color.FromArgb(22, 64, 151) : Color.FromArgb(232, 239, 250),
+            MouseDownBackColor = primary ? Color.FromArgb(15, 48, 119) : Color.FromArgb(218, 229, 246)
+        }
     };
 
     private static TableLayoutPanel MakeSettingsActions()
@@ -426,6 +437,9 @@ internal sealed class MainForm : Form
         // ClientSize excludes visible scrollbars as well as the native window frame.
         MinimumSize = new Size((int)Math.Ceiling(440 * DeviceDpi / 96d) + Width - ClientSize.Width,
             SizeFromClientSize(Size.Empty).Height);
+        var screen = IsHandleCreated ? Screen.FromHandle(Handle) : Screen.PrimaryScreen;
+        if (screen is not null)
+            MaximumSize = screen.WorkingArea.Size;
         if (mainInputs is not null)
             SizeInputButtons(mainInputs);
     }
@@ -435,7 +449,7 @@ internal sealed class MainForm : Form
         var layout = new TableLayoutPanel
         {
             Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            Padding = new Padding(14), ColumnCount = 1, RowCount = 7
+            Padding = new Padding(14), ColumnCount = 1, RowCount = 7, BackColor = Color.White
         };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         AutoScroll = true;
@@ -443,8 +457,8 @@ internal sealed class MainForm : Form
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.Controls.Add(new Label
         {
-            Text = "Monitor", Font = new Font(Font, FontStyle.Bold),
-            AutoSize = true, Dock = DockStyle.Top, Margin = new Padding(0, 0, 0, 2)
+            Text = "Your connected display", Font = new Font(Font.FontFamily, 12, FontStyle.Bold),
+            ForeColor = Ink, AutoSize = true, Dock = DockStyle.Top, Margin = new Padding(0, 0, 0, 8)
         }, 0, 0);
         var selection = new TableLayoutPanel
         {
@@ -462,8 +476,8 @@ internal sealed class MainForm : Form
         layout.Controls.Add(defaultLabel, 0, 2);
         layout.Controls.Add(new Label
         {
-            Text = "Switch input", AutoSize = true,
-            Font = new Font(Font, FontStyle.Bold), Margin = new Padding(0, 8, 0, 2)
+            Text = "Choose an input", AutoSize = true, ForeColor = Ink,
+            Font = new Font(Font.FontFamily, 12, FontStyle.Bold), Margin = new Padding(0, 12, 0, 6)
         }, 0, 3);
         var inputs = new TableLayoutPanel
         {
@@ -495,6 +509,9 @@ internal sealed class MainForm : Form
         status.Dock = DockStyle.Fill;
         status.Margin = new Padding(0, 6, 0, 0);
         layout.Controls.Add(status, 0, 5);
+        errorPanel.Padding = new Padding(10);
+        errorPanel.BackColor = Color.FromArgb(255, 241, 242);
+        errorPanel.BorderStyle = BorderStyle.FixedSingle;
         errorPanel.Controls.Add(errorStatus, 0, 0);
         var errorActions = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top };
         var details = MakeButton("Details...");
@@ -506,10 +523,13 @@ internal sealed class MainForm : Form
         errorActions.Controls.AddRange([details, dismiss]);
         errorPanel.Controls.Add(errorActions, 0, 1);
         errorPanel.Layout += (_, _) =>
-            errorStatus.MaximumSize = new Size(Math.Max(1, layout.ClientSize.Width - layout.Padding.Horizontal), 0);
+            errorStatus.MaximumSize = new Size(Math.Max(1, errorPanel.ClientSize.Width - errorPanel.Padding.Horizontal - 8), 0);
         layout.Controls.Add(errorPanel, 0, 6);
         Controls.Add(layout);
         menuBar.Font = Font;
+        menuBar.BackColor = Canvas;
+        menuBar.ForeColor = Ink;
+        menuBar.RenderMode = ToolStripRenderMode.System;
         menuBar.Items.Add(settingsMenu);
         MainMenuStrip = menuBar;
         Controls.Add(menuBar);
@@ -573,7 +593,7 @@ internal sealed class MainForm : Form
         var diagnosticLayout = new TableLayoutPanel
         {
             Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            ColumnCount = 1, RowCount = 3
+            ColumnCount = 1, RowCount = 3, BackColor = Color.White, Padding = new Padding(12)
         };
         diagnosticLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         diagnosticLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -602,12 +622,12 @@ internal sealed class MainForm : Form
         var generalLayout = new TableLayoutPanel
         {
             Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            ColumnCount = 1, RowCount = 5
+            ColumnCount = 1, RowCount = 5, BackColor = Color.White, Padding = new Padding(12)
         };
         generalLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         generalLayout.Controls.Add(new Label
         {
-            Text = "Startup and confirmation changes are saved immediately.\r\n" +
+            Text = "Make the app work your way.\r\nStartup and confirmation changes are saved immediately.\r\n" +
                 "Choose a monitor in the main window before saving it as your default.",
             AutoSize = true, Dock = DockStyle.Fill, Margin = new Padding(3, 0, 3, 12)
         }, 0, 0);
@@ -629,7 +649,7 @@ internal sealed class MainForm : Form
         var namesLayout = new TableLayoutPanel
         {
             Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            ColumnCount = 3, RowCount = 5
+            ColumnCount = 3, RowCount = 5, BackColor = Color.White, Padding = new Padding(12)
         };
         namesLayout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         namesLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
@@ -685,7 +705,10 @@ internal sealed class MainForm : Form
         namesTab.Controls.Add(namesLayout);
         settingsTabs.TabPages.Add(namesTab);
         var advancedTab = new TabPage("Advanced") { BackColor = Canvas };
-        var advancedTabs = new TabControl { Dock = DockStyle.Fill, Padding = new Point(10, 4) };
+        var advancedTabs = new TabControl
+        {
+            Dock = DockStyle.Fill, Padding = new Point(14, 7), AccessibleName = "Advanced settings sections"
+        };
         advancedTabs.TabPages.Add(diagnosticTab);
         advancedTab.Controls.Add(advancedTabs);
         settingsTabs.TabPages.Add(advancedTab);
@@ -782,6 +805,8 @@ internal sealed class MainForm : Form
         trayMenu.Items.Add(new ToolStripSeparator());
         trayMenu.Items.Add("&Quit", null, (_, _) => ExitApplication());
         trayMenu.Opening += (_, _) => UpdateControls();
+        trayMenu.Font = Font;
+        trayMenu.RenderMode = ToolStripRenderMode.System;
         tray.Icon = Icon;
         tray.Text = AppName;
         tray.ContextMenuStrip = trayMenu;
@@ -1392,7 +1417,8 @@ internal sealed class MainForm : Form
             control.Dispose();
         var panel = new TableLayoutPanel
         {
-            Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, RowCount = 3
+            Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, RowCount = 3,
+            BackColor = Color.White, Padding = new Padding(12)
         };
         panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -1406,6 +1432,24 @@ internal sealed class MainForm : Form
         profileGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Value", HeaderText = "VCP 0x60 value" });
         profileGrid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "ShowInput", HeaderText = "Show" });
         profileGrid.DefaultValuesNeeded += (_, e) => e.Row.Cells[2].Value = true;
+        profileGrid.DefaultCellStyle.ForeColor = Ink;
+        profileGrid.DefaultCellStyle.BackColor = Color.White;
+        profileGrid.DefaultCellStyle.SelectionBackColor = Accent;
+        profileGrid.DefaultCellStyle.SelectionForeColor = Color.White;
+        profileGrid.DefaultCellStyle.Padding = new Padding(4, 2, 4, 2);
+        profileGrid.AlternatingRowsDefaultCellStyle.BackColor = Canvas;
+        profileGrid.ColumnHeadersDefaultCellStyle.BackColor = Canvas;
+        profileGrid.ColumnHeadersDefaultCellStyle.ForeColor = Ink;
+        profileGrid.ColumnHeadersDefaultCellStyle.Font = new Font(Font, FontStyle.Bold);
+        profileGrid.ColumnHeadersDefaultCellStyle.SelectionBackColor = Canvas;
+        profileGrid.ColumnHeadersDefaultCellStyle.SelectionForeColor = Ink;
+        profileGrid.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize;
+        profileGrid.RowHeadersDefaultCellStyle.BackColor = Canvas;
+        profileGrid.RowHeadersDefaultCellStyle.ForeColor = Ink;
+        profileGrid.RowTemplate.Height = (int)Math.Ceiling(30 * DeviceDpi / 96d);
+        profileGrid.Columns[0].FillWeight = 50;
+        profileGrid.Columns[1].FillWeight = 30;
+        profileGrid.Columns[2].FillWeight = 20;
         panel.Controls.Add(profileGrid, 0, 1);
         var actions = MakeSettingsActions();
         var saveProfile = MakeButton("Save monitor inputs");
