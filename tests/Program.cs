@@ -126,6 +126,28 @@ try
         "Per-monitor profiles preserve generic inputs and explicitly imported legacy names, values and visibility");
     Check(!restored.ContainsKey("unrelated-monitor"),
         "Legacy migration never applies a profile to an unrelated monitor");
+    var returningMonitor = new FakeMonitor { Capabilities = "not supported" };
+    var remembered = MonitorProfiles.GetOrDiscover(returningMonitor, "MONITOR-B", restored);
+    Check(remembered.Remembered && remembered.Profile == restored["monitor-b"] &&
+        returningMonitor.Reads == 0 && returningMonitor.Writes == 0,
+        "Returning monitors reuse all saved input settings without capability reads or writes");
+    File.WriteAllText(path, JsonSerializer.Serialize(restored));
+    var afterDisconnect = MonitorProfiles.Load(path);
+    Check(MonitorProfiles.GetOrDiscover(returningMonitor, "monitor-b", afterDisconnect).Remembered &&
+        afterDisconnect.Count == 2 && returningMonitor.Reads == 0,
+        "Restarting with disconnected monitors retains their profiles for reconnection");
+    var firstMonitor = new FakeMonitor { Capabilities = "(vcp(60(0F 11)))" };
+    var unavailableMonitor = new FakeMonitor { Capabilities = "(vcp(10))" };
+    var thirdMonitor = new FakeMonitor { Capabilities = "(vcp(60(12)))" };
+    var discoveries = new[] { firstMonitor, unavailableMonitor, thirdMonitor }
+        .Select(connection => MonitorProfiles.GetOrDiscover(connection, null, restored)).ToArray();
+    Check(discoveries[0].Profile.Inputs.Count == 2 && discoveries[1].Error is InvalidOperationException &&
+        discoveries[2].Profile.Inputs.Count == 1 && discoveries.All(discovery => !discovery.Remembered) &&
+        new[] { firstMonitor, unavailableMonitor, thirdMonitor }.All(connection => connection.Reads == 1 && connection.Writes == 0),
+        "First-run discovery includes every monitor and continues after unsupported capabilities without any writes");
+    var ambiguous = MonitorProfiles.GetOrDiscover(thirdMonitor, null, restored);
+    Check(!ambiguous.Remembered && thirdMonitor.Reads == 2,
+        "A monitor without unique identity cannot inherit an unrelated saved profile");
     File.WriteAllText(path, "{\"monitor-a\":{\"Inputs\":[{\"Id\":\"x\",\"Name\":\"HDMI\",\"Value\":\"65536\"}]}}");
     try
     {
@@ -566,8 +588,10 @@ var layoutThread = new Thread(() =>
             failUpdate = true;
             daily.CheckForUpdatesIfDueAsync().GetAwaiter().GetResult();
             var diagnosticLog = (TextBox)typeof(MainForm).GetField("log", fields)!.GetValue(daily)!;
+            var updateError = (Label)typeof(MainForm).GetField("errorStatus", fields)!.GetValue(daily)!;
             Check(updateHandler.Requests == 3 && diagnosticLog.Text.Contains("Automatic update check failed") &&
-                updateItem.Enabled && message.Text == "Monitor operation status",
+                updateItem.Enabled && message.Text == "Monitor operation status" &&
+                updateError.Text.Contains("internet connection") && !updateError.Text.Contains("502"),
                 "Network failures are reported without blocking controls or overwriting monitor status");
             daily.CheckForUpdatesIfDueAsync().GetAwaiter().GetResult();
             Check(updateHandler.Requests == 3, "Failed checks do not cause a request burst on every timer tick");
@@ -594,7 +618,93 @@ var layoutThread = new Thread(() =>
                 [new IOException("Simulated first-run settings failure"), true]);
             var log = (TextBox)typeof(MainForm).GetField("log", flags)!.GetValue(firstTrayLaunch)!;
             Check(!firstTrayLaunch.Visible && log.Text.Contains("Simulated first-run settings failure"),
-                "First-run tray failures are logged and notified without opening a modal dialog or main form");
+                "First-run tray failures are logged without opening a modal dialog or main form");
+            var errorMessage = (Label)typeof(MainForm).GetField("errorStatus", flags)!.GetValue(firstTrayLaunch)!;
+            Check(errorMessage.Text.Contains("Refresh") && !errorMessage.Text.Contains("Simulated"),
+                "Friendly error guidance is retained separately from raw diagnostic details");
+            typeof(MainForm).GetMethod("SetSelectionStatus", flags)!.Invoke(firstTrayLaunch, null);
+            Check(errorMessage.Text.Contains("Refresh"),
+                "Refreshing monitor status cannot erase an error raised while the window was hidden");
+        }
+        var setupProfile = MonitorProfiles.FromCapabilities("(vcp(60(0F 10 11 12 99)))");
+        var setupOptions = new[]
+        {
+            new MonitorSetupOption("Work monitor", "monitor-a", new(setupProfile, true, null)),
+            new MonitorSetupOption("New monitor", "monitor-b",
+                new(new MonitorProfile(), false, new InvalidOperationException("Technical discovery failure"))),
+            new MonitorSetupOption("Unidentified monitor", null, new(setupProfile, false, null))
+        };
+        using (var setup = new MonitorSetupDialog(setupOptions, SystemFonts.MessageBoxFont!, null))
+        {
+            Check(setup.MonitorChoice.Items.Count == 3 && setup.SelectedMonitorIndex == -1 &&
+                !setup.SaveDefault.Enabled && !setup.ConfigureInputs.Enabled,
+                "Default setup lists every monitor without silently choosing a default");
+            setup.MonitorChoice.SelectedIndex = 0;
+            Check(setup.SaveDefault.Enabled && setup.InputSummary.Text.Contains("Saved inputs") &&
+                setup.InputSummary.Text.Contains("HDMI 1"),
+                "Default setup shows remembered inputs and enables explicit default selection");
+            setup.MonitorChoice.SelectedIndex = 1;
+            Check(setup.SaveDefault.Enabled && setup.ConfigureInputs.Enabled &&
+                setup.InputSummary.Text.Contains("documentation") &&
+                !setup.InputSummary.Text.Contains("Technical discovery failure"),
+                "Failed discovery offers friendly manual setup without blocking a default choice");
+            setup.MonitorChoice.SelectedIndex = 2;
+            Check(!setup.SaveDefault.Enabled && setup.ConfigureInputs.Enabled &&
+                setup.InputSummary.Text.Contains("couldn't uniquely identify"),
+                "Ambiguous monitor identity permits input editing but prevents saving a false default");
+            setup.Font = new System.Drawing.Font(setup.Font.FontFamily, 18);
+            setup.Show();
+            setup.PerformLayout();
+            Check(setup.InputSummary.MaximumSize.Width > 0 &&
+                setup.Width <= Screen.FromControl(setup).WorkingArea.Width,
+                "Default setup wraps input descriptions and stays within the display at large fonts");
+            setup.Close();
+        }
+        string setupDirectory = Path.Combine(placementDirectory, "remembered-setup");
+        using (var rememberedForm = new MainForm(startInTray: true, settingsDirectory: setupDirectory))
+        {
+            var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+            var rememberedInventory = new MonitorInventory();
+            var returning = new NativeMonitor(0, "Returning", "Returning", "monitor-a");
+            rememberedInventory.Monitors.Add(returning);
+            typeof(MainForm).GetField("inventory", flags)!.SetValue(rememberedForm, rememberedInventory);
+            typeof(MainForm).GetField("profiles", flags)!.SetValue(rememberedForm,
+                new Dictionary<string, MonitorProfile>(StringComparer.OrdinalIgnoreCase) { ["monitor-a"] = setupProfile });
+            var rememberedPreferences = new Preferences { MonitorSetupCompleted = true, SuppressSwitchConfirmation = true };
+            typeof(MainForm).GetField("preferences", flags)!.SetValue(rememberedForm, rememberedPreferences);
+            typeof(MainForm).GetField("busy", flags)!.SetValue(rememberedForm, true);
+            typeof(MainForm).GetField("stale", flags)!.SetValue(rememberedForm, false);
+            var list = (ComboBox)typeof(MainForm).GetField("monitors", flags)!.GetValue(rememberedForm)!;
+            list.Items.Add(returning);
+            list.SelectedIndex = 0;
+            typeof(MainForm).GetField("busy", flags)!.SetValue(rememberedForm, false);
+            ((Task)typeof(MainForm).GetMethod("PrepareMonitorProfileAsync", flags)!
+                .Invoke(rememberedForm, null)!).GetAwaiter().GetResult();
+            Check(((Button[])typeof(MainForm).GetField("switches", flags)!.GetValue(rememberedForm)!).Length == 5 &&
+                !rememberedForm.Visible,
+                "Reconnected monitor loads its saved UI without discovery or setup prompts");
+            rememberedForm.CompleteMonitorSetup(setupOptions, DialogResult.Cancel, -1);
+            var skipped = JsonSerializer.Deserialize<Preferences>(
+                File.ReadAllText(Path.Combine(setupDirectory, "preferences.json")))!;
+            Check(skipped.MonitorSetupCompleted && skipped.DefaultMonitorId is null,
+                "Skipping first setup persists completion without silently choosing a default");
+            rememberedForm.CompleteMonitorSetup(setupOptions, DialogResult.OK, 0);
+            var persisted = JsonSerializer.Deserialize<Preferences>(
+                File.ReadAllText(Path.Combine(setupDirectory, "preferences.json")))!;
+            Check(persisted.DefaultMonitorId == "monitor-a" && persisted.MonitorSetupCompleted &&
+                persisted.SuppressSwitchConfirmation,
+                "Saving a default preserves setup completion and confirmation preferences");
+            typeof(MainForm).GetMethod("ReleaseInventory", flags)!.Invoke(rememberedForm, [false]);
+            Check(((Preferences)typeof(MainForm).GetField("preferences", flags)!.GetValue(rememberedForm)!)
+                .DefaultMonitorId == "monitor-a" &&
+                ((Dictionary<string, MonitorProfile>)typeof(MainForm).GetField("profiles", flags)!
+                    .GetValue(rememberedForm)!).ContainsKey("monitor-a"),
+                "Disconnecting a monitor retains both its default preference and saved profile");
+            var log = (TextBox)typeof(MainForm).GetField("log", flags)!.GetValue(rememberedForm)!;
+            rememberedForm.ReportError(new InvalidOperationException("Invalid input row"), ErrorContext.Settings,
+                "Test validation", showDialog: false);
+            Check(log.Text.Contains("Invalid input row") && !rememberedForm.Visible,
+                "Friendly validation errors preserve technical diagnostics without opening a hidden window");
         }
         using (var generic = new MainForm(startInTray: true, windowPositionPath: placementPath))
         {
@@ -765,7 +875,7 @@ var layoutThread = new Thread(() =>
             .Select(item => item.Text).SequenceEqual(expectedMenu),
             "Standard Settings menu exposes preferences, logging, updates, About and Exit with keyboard mnemonics");
         var mainLayout = main.Controls.OfType<TableLayoutPanel>().Single();
-        Check(mainLayout.RowCount == 6 && !mainLayout.Controls.OfType<FlowLayoutPanel>().Any() &&
+        Check(mainLayout.RowCount == 7 && !mainLayout.Controls.OfType<FlowLayoutPanel>().Any() &&
             mainLayout.Controls.OfType<Label>().Any(label => mainLayout.GetRow(label) == 5),
             "Main window has no Run in tray button or empty footer row");
         var trayMenu = (ContextMenuStrip)typeof(MainForm).GetField("trayMenu",
@@ -801,8 +911,8 @@ var layoutThread = new Thread(() =>
             "General groups startup, confirmation, and both default-monitor actions");
         var technicalTabs = settingsTabs.TabPages[2].Controls.OfType<TabControl>().Single();
         Check(technicalTabs.TabPages.Cast<TabPage>().Select(tab => tab.Text)
-            .SequenceEqual(["Input values", "Diagnostics"]),
-            "Advanced keeps VCP editing separate from diagnostic reads");
+            .SequenceEqual(["Diagnostics"]),
+            "Advanced contains Diagnostics only, without the redundant Input values page");
         IEnumerable<Control> Descendants(Control parent) =>
             parent.Controls.Cast<Control>().SelectMany(child => new[] { child }.Concat(Descendants(child)));
         var help = (ToolTip)typeof(MainForm).GetField("buttonHelp",
@@ -1013,7 +1123,7 @@ var layoutThread = new Thread(() =>
                     $"Custom-name settings fit without clipping at {size}pt " +
                     $"(panel={namesPanel.ClientSize}, labels={string.Join("; ", namesPanel.Controls.OfType<Label>().Select(label => label.Bounds))})");
                 foreach (var page in new[] { settingsTabs.TabPages[0], settingsTabs.TabPages[1],
-                technicalTabs.TabPages[0], technicalTabs.TabPages[1] })
+                technicalTabs.TabPages[0] })
                 {
                     settingsTabs.SelectedIndex = settingsTabs.TabPages.Contains(page)
                         ? settingsTabs.TabPages.IndexOf(page) : 2;
@@ -1050,7 +1160,7 @@ var layoutThread = new Thread(() =>
                         $"controls={string.Join("; ", panel.Controls.Cast<Control>().Select(control => $"{control.Text}: {control.Bounds}, preferred={control.GetPreferredSize(new System.Drawing.Size(control.Width, 0))}"))}, " +
                         $"buttons={string.Join("; ", panel.Controls.OfType<TableLayoutPanel>().SelectMany(actions => actions.Controls.Cast<Control>()).Select(control => $"{control.Text}: {control.Bounds}, parent={control.Parent!.ClientSize}"))})");
                 }
-                technicalTabs.SelectedIndex = 1;
+                technicalTabs.SelectedIndex = 0;
                 var diagnosticPage = technicalTabs.SelectedTab!;
                 diagnosticPage.PerformLayout();
                 var diagnosticPanel = diagnosticPage.Controls.OfType<TableLayoutPanel>().Single();

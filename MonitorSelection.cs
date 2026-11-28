@@ -26,4 +26,5 @@ internal sealed class Preferences
 {
     public string? DefaultMonitorId { get; set; }
     public bool SuppressSwitchConfirmation { get; set; }
+    public bool MonitorSetupCompleted { get; set; }
 }
