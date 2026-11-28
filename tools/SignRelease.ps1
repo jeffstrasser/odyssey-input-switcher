@@ -6,6 +6,11 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 
+function Get-SigningPowerShell {
+    $name = if ($PSVersionTable.PSEdition -eq 'Core') { 'pwsh.exe' } else { 'powershell.exe' }
+    return Join-Path $PSHOME $name
+}
+
 function Get-ReleaseSigningCertificate {
     param([string]$Thumbprint)
     if ($Thumbprint) {

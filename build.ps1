@@ -90,8 +90,8 @@ if (!$SkipInstaller) {
     if ($SigningMode -eq 'SelfSigned') {
         if ($TimestampServer -notmatch '^https?://[A-Za-z0-9./:_-]+$') { throw 'Invalid timestamp server URL.' }
         $script = (Join-Path $PSScriptRoot 'tools\SignRelease.ps1').Replace('$', '$$')
-        $shell = (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe').Replace('$', '$$')
-        $signCommand = '$q' + $shell + '$q -NoProfile -File $q' + $script + '$q -FilePath $f'
+        $shell = (Get-SigningPowerShell).Replace('$', '$$')
+        $signCommand = '$q' + $shell + '$q -NoProfile -NonInteractive -File $q' + $script + '$q -FilePath $f'
         if ($SigningCertificateThumbprint) { $signCommand += " -CertificateThumbprint $SigningCertificateThumbprint" }
         $signCommand += " -TimestampServer $TimestampServer"
         $compilerArguments += '/DEnableSigning', "/SConnectedDisplaySelfSigned=$signCommand"

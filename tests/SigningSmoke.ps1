@@ -6,6 +6,8 @@ $directory = Join-Path ([IO.Path]::GetTempPath()) ('connected-display-signing-te
 $certificate = $null
 $oldPfx = $env:SIGNING_PFX_BASE64
 $oldPassword = $env:SIGNING_PFX_PASSWORD
+$oldSmokeScript = $env:SIGNING_SMOKE_SCRIPT
+$oldSmokeExecutable = $env:SIGNING_SMOKE_EXECUTABLE
 New-Item -ItemType Directory -Path $directory | Out-Null
 try {
     $certificate = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=Temporary Connected Display Signing Test' `
@@ -43,16 +45,26 @@ try {
     Copy-Item -LiteralPath $source -Destination $fromSecret
     Invoke-ReleaseSigning -Path $fromSecret -WithoutTimestamp
     Assert-ReleaseSignature -Path $fromSecret -Thumbprint $certificate.Thumbprint
+    $childSigned = Join-Path $directory 'child-signed.exe'
+    Copy-Item -LiteralPath $source -Destination $childSigned
+    $env:SIGNING_SMOKE_SCRIPT = (Resolve-Path -LiteralPath "$PSScriptRoot\..\tools\SignRelease.ps1").Path
+    $env:SIGNING_SMOKE_EXECUTABLE = $childSigned
+    $command = '$ErrorActionPreference = ''Stop''; . $env:SIGNING_SMOKE_SCRIPT; Invoke-ReleaseSigning -Path $env:SIGNING_SMOKE_EXECUTABLE -WithoutTimestamp'
+    & (Get-SigningPowerShell) -NoProfile -NonInteractive -Command $command
+    if ($LASTEXITCODE -ne 0) { throw 'Signing in a child PowerShell process failed.' }
+    Assert-ReleaseSignature -Path $childSigned -Thumbprint $certificate.Thumbprint
     $env:SIGNING_PFX_BASE64 = $null
     $env:SIGNING_PFX_PASSWORD = $null
     $missingRejected = $false
     try { Invoke-ReleaseSigning -Path $fromSecret -WithoutTimestamp }
     catch { $missingRejected = $true }
     if (!$missingRejected) { throw 'Signing accepted missing credentials.' }
-    Write-Output 'PASS: self-signed Authenticode, PFX secret loading, tamper rejection, and required timestamp/credential failures. No Windows trust was installed.'
+    Write-Output 'PASS: self-signed Authenticode, PFX and child-process signing, tamper rejection, and required timestamp/credential failures. No Windows trust was installed.'
 } finally {
     $env:SIGNING_PFX_BASE64 = $oldPfx
     $env:SIGNING_PFX_PASSWORD = $oldPassword
+    $env:SIGNING_SMOKE_SCRIPT = $oldSmokeScript
+    $env:SIGNING_SMOKE_EXECUTABLE = $oldSmokeExecutable
     if ($certificate) {
         $thumbprint = $certificate.Thumbprint
         $certificate.Dispose()
