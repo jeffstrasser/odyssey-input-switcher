@@ -86,7 +86,7 @@ foreach ($target in $targets) {
 if (!$SkipInstaller) {
     $setup = "dist\OdysseyInputSwitcher-Setup-$Version.exe"
     if (Test-Path -LiteralPath $setup) { Remove-Item -LiteralPath $setup }
-    $compilerArguments = @('/Qp', "/DAppVersion=$Version", "/DAppFileVersion=$binaryVersion.0")
+    $compilerArguments = @("/DAppVersion=$Version", "/DAppFileVersion=$binaryVersion.0")
     if ($SigningMode -eq 'SelfSigned') {
         if ($TimestampServer -notmatch '^https?://[A-Za-z0-9./:_-]+$') { throw 'Invalid timestamp server URL.' }
         $script = (Join-Path $PSScriptRoot 'tools\SignRelease.ps1').Replace('$', '$$')
