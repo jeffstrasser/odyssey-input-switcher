@@ -38,6 +38,25 @@ if (args.Length == 4 && args[0] == "--verify-package")
     return;
 }
 
+if (args.SequenceEqual(["--monitor-inquiry"]))
+{
+    using var connected = MonitorInventory.Enumerate();
+    foreach (string message in connected.Messages)
+        Console.WriteLine(message);
+    foreach (var display in connected.Monitors)
+    {
+        Console.WriteLine(display.DisplayName + "\r\n" + display.IdentityDiagnostics +
+            "\r\nMonitor interface: " + (display.StableId ?? "unavailable"));
+        try { Console.WriteLine("Raw advertised capabilities (not verified): " + display.ReadCapabilities()); }
+        catch (Exception error) when (error is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            Console.WriteLine("Input inquiry unavailable: " + error.Message);
+        }
+    }
+    Console.WriteLine("Read-only monitor inquiry complete. No input commands sent.");
+    return;
+}
+
 int assertions = 0;
 void Check(bool passed, string description)
 {
@@ -80,13 +99,56 @@ foreach (string? invalid in new string?[] { null, "-1", "65536", "0xGG" })
     }
 }
 var monitor = new FakeMonitor();
+var windowsTargets = new[]
+{
+    new WindowsDisplayTarget(@"\\.\DISPLAY1", "interface-a", "Odyssey G93SD", 5, 0x4C2D, 0x7196),
+    new WindowsDisplayTarget(@"\\.\DISPLAY2", "interface-b", "Odyssey G93SD")
+};
+var odysseyIdentity = WindowsMonitorIdentity.Resolve(@"\\.\DISPLAY1", "interface-a",
+    "Generic Monitor (Odyssey G93SD)", "Generic PnP Monitor", 1, windowsTargets, true);
+Check(odysseyIdentity.Name == "Odyssey G93SD" && odysseyIdentity.StableId == "interface-a" &&
+    odysseyIdentity.Identified && odysseyIdentity.Diagnostics.Contains("Generic PnP Monitor") &&
+    odysseyIdentity.Diagnostics.Contains("EDID"),
+    "Use the correctly matched Windows/EDID model instead of the generic physical-monitor label, retaining both diagnostic sources");
+Check(WindowsMonitorIdentity.Resolve(@"\\.\DISPLAY2", "INTERFACE-B", "", "Generic PnP Monitor",
+    1, windowsTargets, true).StableId == "interface-b",
+    "Identical model names never collapse two distinct monitor interfaces");
+Check(WindowsMonitorIdentity.Resolve(@"\\.\DISPLAY1", null, "", "Generic PnP Monitor",
+    1, windowsTargets, true).StableId == "interface-a",
+    "A unique complete active Windows target supplies an identity when EnumDisplayDevices cannot");
+Check(WindowsMonitorIdentity.Resolve(@"\\.\DISPLAY1", null, "", "Generic PnP Monitor",
+    1, windowsTargets, false).StableId is null,
+    "An incomplete metadata query cannot turn a possibly ambiguous target into a unique identity");
+var mirroredTargets = windowsTargets.Append(new WindowsDisplayTarget(@"\\.\DISPLAY1", "interface-c", "Other model")).ToArray();
+Check(WindowsMonitorIdentity.Resolve(@"\\.\DISPLAY1", null, "", "Generic PnP Monitor",
+    1, mirroredTargets, true).StableId is null &&
+    WindowsMonitorIdentity.Resolve(@"\\.\DISPLAY1", "interface-a", "", "Generic PnP Monitor",
+        2, windowsTargets, true).StableId is null,
+    "Mirrored paths and multiple physical handles cannot inherit the first monitor's identity or model");
+var conflictIdentity = WindowsMonitorIdentity.Resolve(@"\\.\DISPLAY1", "different-interface",
+    "Wrong model", "Generic PnP Monitor", 1, windowsTargets, true);
+Check(conflictIdentity.StableId is null && !conflictIdentity.Identified,
+    "Conflicting Windows interface sources cannot attach another display's name or settings");
+var genericIdentity = WindowsMonitorIdentity.Resolve(@"\\.\DISPLAY3", "interface-generic",
+    "Generic Monitor", "Generic PnP Monitor", 1, [], true);
+Check(!genericIdentity.Identified && genericIdentity.Name == "Unidentified monitor" &&
+    genericIdentity.StableId == "interface-generic",
+    "Unknown model names are stated plainly without discarding a reliable per-connection Windows identity");
+Check(WindowsMonitorIdentity.Resolve(@"\\.\DISPLAY3", "interface-generic",
+    "Generic Monitor (Odyssey G93SD)", "Generic PnP Monitor", 1, [], false).Name ==
+    "Generic Monitor (Odyssey G93SD)",
+    "Retain the richer EnumDisplayDevices name when active display metadata is unavailable");
 var capabilityMonitor = new FakeMonitor { Capabilities = "(prot(monitor) model(Test) vcp(10 60(0f 10 11 12 99 11) D6(01 04)))" };
 var discoveredInputs = MonitorProfiles.Discover(capabilityMonitor);
 Check(discoveredInputs.Inputs.Select(input => input.Value).SequenceEqual(
     ["0x000F", "0x0010", "0x0011", "0x0012", "0x0099"]) &&
     discoveredInputs.Inputs.Select(input => input.Name).SequenceEqual(
-    ["DisplayPort 1", "DisplayPort 2", "HDMI 1", "HDMI 2", "Input 0x0099"]),
-    "Discover variable input-source lists, remove duplicate values, and label recognized and unknown sources");
+    ["Input 0x000F", "Input 0x0010", "Input 0x0011", "Input 0x0012", "Input 0x0099"]) &&
+    !discoveredInputs.Configured && discoveredInputs.Source == InputConfigurationSource.Advertised,
+    "Advertised values retain neutral numeric names and unreviewed provenance instead of assumed physical port mappings");
+Check(MonitorProfiles.FromCapabilities("(vcp(60(05 06)))").Inputs.Select(input => input.Name)
+    .SequenceEqual(["Input 0x0005", "Input 0x0006"]),
+    "Odyssey custom HDMI values cannot be mislabeled as confirmed Composite inputs");
 Check(capabilityMonitor.Reads == 1 && capabilityMonitor.Writes == 0,
     "First-run capability discovery performs exactly one read and no input writes");
 foreach (string invalid in new[]
@@ -126,6 +188,8 @@ try
         "Per-monitor profiles preserve generic inputs and explicitly imported legacy names, values and visibility");
     Check(!restored.ContainsKey("unrelated-monitor"),
         "Legacy migration never applies a profile to an unrelated monitor");
+    Check(!restored["monitor-a"].Configured && restored["monitor-b"].Configured,
+        "Persistence distinguishes advertised candidates from explicitly user-configured settings");
     var returningMonitor = new FakeMonitor { Capabilities = "not supported" };
     var remembered = MonitorProfiles.GetOrDiscover(returningMonitor, "MONITOR-B", restored);
     Check(remembered.Remembered && remembered.Profile == restored["monitor-b"] &&
@@ -148,6 +212,11 @@ try
     var ambiguous = MonitorProfiles.GetOrDiscover(thirdMonitor, null, restored);
     Check(!ambiguous.Remembered && thirdMonitor.Reads == 2,
         "A monitor without unique identity cannot inherit an unrelated saved profile");
+    File.WriteAllText(path, "{\"monitor-a\":{\"Inputs\":[{\"Id\":\"x\",\"Name\":\"Wrong HDMI\",\"Value\":\"17\"}]}}");
+    var oldProfile = MonitorProfiles.Load(path)["monitor-a"];
+    Check(!oldProfile.Configured && oldProfile.Source == InputConfigurationSource.Unknown &&
+        oldProfile.Inputs[0].Name == "Wrong HDMI" && oldProfile.Inputs[0].Value == "17",
+        "Pre-provenance profiles keep all values for review without silently trusting old automatically discovered mappings");
     File.WriteAllText(path, "{\"monitor-a\":{\"Inputs\":[{\"Id\":\"x\",\"Name\":\"HDMI\",\"Value\":\"65536\"}]}}");
     try
     {
@@ -627,20 +696,24 @@ var layoutThread = new Thread(() =>
                 "Refreshing monitor status cannot erase an error raised while the window was hidden");
         }
         var setupProfile = MonitorProfiles.FromCapabilities("(vcp(60(0F 10 11 12 99)))");
+        setupProfile.Source = InputConfigurationSource.UserConfigured;
+        setupProfile.Inputs[2].Name = "HDMI 1";
         var setupOptions = new[]
         {
             new MonitorSetupOption("Work monitor", "monitor-a", new(setupProfile, true, null)),
             new MonitorSetupOption("New monitor", "monitor-b",
                 new(new MonitorProfile(), false, new InvalidOperationException("Technical discovery failure"))),
-            new MonitorSetupOption("Unidentified monitor", null, new(setupProfile, false, null))
+            new MonitorSetupOption("Unidentified monitor", null, new(setupProfile, false, null)),
+            new MonitorSetupOption("Unidentified new monitor", "monitor-c",
+                new(MonitorProfiles.FromCapabilities("(vcp(60(05 06)))"), false, null), Identified: false)
         };
         using (var setup = new MonitorSetupDialog(setupOptions, SystemFonts.MessageBoxFont!, null))
         {
-            Check(setup.MonitorChoice.Items.Count == 3 && setup.SelectedMonitorIndex == -1 &&
+            Check(setup.MonitorChoice.Items.Count == 4 && setup.SelectedMonitorIndex == -1 &&
                 !setup.SaveDefault.Enabled && !setup.ConfigureInputs.Enabled,
                 "Default setup lists every monitor without silently choosing a default");
             setup.MonitorChoice.SelectedIndex = 0;
-            Check(setup.SaveDefault.Enabled && setup.InputSummary.Text.Contains("Saved inputs") &&
+            Check(setup.SaveDefault.Enabled && setup.InputSummary.Text.Contains("Saved user-configured inputs") &&
                 setup.InputSummary.Text.Contains("HDMI 1"),
                 "Default setup shows remembered inputs and enables explicit default selection");
             setup.MonitorChoice.SelectedIndex = 1;
@@ -652,6 +725,10 @@ var layoutThread = new Thread(() =>
             Check(!setup.SaveDefault.Enabled && setup.ConfigureInputs.Enabled &&
                 setup.InputSummary.Text.Contains("couldn't uniquely identify"),
                 "Ambiguous monitor identity permits input editing but prevents saving a false default");
+            setup.MonitorChoice.SelectedIndex = 3;
+            Check(setup.InputSummary.Text.Contains("couldn't identify") && setup.InputSummary.Text.Contains("advertised") &&
+                setup.ConfigureInputs.Text == "Review inputs..." && !setup.InputSummary.Text.Contains("Composite"),
+                "Onboarding explains an unknown model and unverified advertised values instead of offering assumed working ports");
             setup.Font = new System.Drawing.Font(setup.Font.FontFamily, 18);
             setup.Show();
             setup.PerformLayout();
@@ -710,7 +787,7 @@ var layoutThread = new Thread(() =>
         {
             var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
             var monitorList = (ComboBox)typeof(MainForm).GetField("monitors", flags)!.GetValue(generic)!;
-            using var genericMonitor = new NativeMonitor(0, "Generic test", "Generic test", "generic-test");
+            using var genericMonitor = new NativeMonitor(0, "Generic test", "Generic test", "generic-test", identified: false);
             typeof(MainForm).GetField("busy", flags)!.SetValue(generic, true);
             typeof(MainForm).GetField("stale", flags)!.SetValue(generic, false);
             monitorList.Items.Add(genericMonitor);
@@ -720,15 +797,27 @@ var layoutThread = new Thread(() =>
                 "generic-test", genericMonitor);
             var genericButtons = (Button[])typeof(MainForm).GetField("switches", flags)!.GetValue(generic)!;
             var genericTray = (ToolStripMenuItem[])typeof(MainForm).GetField("trayInputs", flags)!.GetValue(generic)!;
-            Check(genericButtons.Length == 4 && genericTray.Length == 4 &&
-                genericButtons.Select(button => button.Text).SequenceEqual(genericTray.Select(item => item.Text)) &&
-                genericButtons.All(button => button.Enabled),
-                "Generic profiles render every advertised input consistently in main and tray actions");
-            var genericPanel = (TableLayoutPanel)genericButtons[0].Parent!;
-            Check(genericButtons.Select(button => genericPanel.GetCellPosition(button))
+            var review = (CheckBox)typeof(MainForm).GetField("reviewInputs", flags)!.GetValue(generic)!;
+            var explanation = (Label)typeof(MainForm).GetField("allInputsHidden", flags)!.GetValue(generic)!;
+            Check(genericButtons.Length == 0 && genericTray.Length == 0 && !review.Checked &&
+                explanation.Text.Contains("couldn't identify") && explanation.Text.Contains("advertised"),
+                "An unidentified display offers review guidance, never unverified main or tray switching actions");
+            var configuredFour = MonitorProfiles.FromCapabilities("(vcp(60(0F 10 11 12)))");
+            configuredFour.Source = InputConfigurationSource.UserConfigured;
+            generic.RenderMonitorProfile(configuredFour, "generic-test", genericMonitor);
+            genericButtons = (Button[])typeof(MainForm).GetField("switches", flags)!.GetValue(generic)!;
+            var fourPanel = (TableLayoutPanel)genericButtons[0].Parent!;
+            Check(genericButtons.Select(button => fourPanel.GetCellPosition(button))
                     .SequenceEqual(new[] { new TableLayoutPanelCellPosition(0, 0), new(1, 0), new(0, 1), new(1, 1) }) &&
-                genericButtons.All(button => genericPanel.GetColumnSpan(button) == 1),
-                "Four configured inputs occupy two rows without dropping actions");
+                genericButtons.All(button => fourPanel.GetColumnSpan(button) == 1),
+                "Four user-configured inputs occupy two rows without dropping actions");
+            generic.RenderMonitorProfile(new MonitorProfile { Inputs = configuredFour.Inputs },
+                "generic-test", genericMonitor);
+            Check(!review.Checked &&
+                ((Button[])typeof(MainForm).GetField("switches", flags)!.GetValue(generic)!).Length == 0,
+                "Older profiles without provenance reset review and cannot retain the previous monitor's active actions");
+            generic.RenderMonitorProfile(MonitorProfiles.FromCapabilities("(vcp(60(0F 10 11 12)))"),
+                "generic-test", genericMonitor);
             var grid = (DataGridView)typeof(MainForm).GetField("profileGrid", flags)!.GetValue(generic)!;
             grid.Rows[0].Cells[0].Value = "Work PC & dock";
             grid.Rows[0].Cells[1].Value = "0x1234";
@@ -740,13 +829,23 @@ var layoutThread = new Thread(() =>
             {
                 string path = Path.Combine(directory, "profiles.json");
                 generic.SaveMonitorProfile(path);
+                Check(!File.Exists(path) &&
+                    ((Button[])typeof(MainForm).GetField("switches", flags)!.GetValue(generic)!).Length == 0,
+                    "Saving without explicit review cannot persist or activate advertised mappings");
+                review.Checked = true;
+                generic.SaveMonitorProfile(path);
                 var profile = MonitorProfiles.Load(path)["generic-test"];
                 Check(profile.Inputs.Count == 4 && profile.Inputs[0].Name == "Work PC & dock" &&
                     profile.Inputs[0].Value == "0x1234" && !profile.Inputs[1].Visible &&
-                    profile.Inputs[3].Value == "0x99",
-                    "Manual setup saves additions, removals, names, values and visibility together");
+                    profile.Inputs[3].Value == "0x99" && profile.Configured,
+                    "Explicit review saves additions, removals, names, values and visibility with user-configured provenance");
                 genericButtons = (Button[])typeof(MainForm).GetField("switches", flags)!.GetValue(generic)!;
-                genericPanel = (TableLayoutPanel)genericButtons[0].Parent!;
+                genericTray = (ToolStripMenuItem[])typeof(MainForm).GetField("trayInputs", flags)!.GetValue(generic)!;
+                Check(genericButtons.Length == 4 && genericTray.Length == 4 &&
+                    genericButtons.Select(button => button.AccessibleName).SequenceEqual(genericTray.Select(item => item.AccessibleName)) &&
+                    genericButtons.Where((_, i) => profile.Inputs[i].Visible).All(button => button.Enabled),
+                    "Only user-reviewed inputs become consistent main and tray actions");
+                var genericPanel = (TableLayoutPanel)genericButtons[0].Parent!;
                 var shown = genericButtons.Where((_, i) => profile.Inputs[i].Visible).ToArray();
                 Check(shown.Length == 3 &&
                     shown.Select(button => genericPanel.GetCellPosition(button)).SequenceEqual(
@@ -758,6 +857,27 @@ var layoutThread = new Thread(() =>
                     Check(confirmation.Dialog.Controls.OfType<TableLayoutPanel>().Single()
                         .Controls.OfType<Label>().First().Text == "Switch to Work PC & dock?",
                         "Generic confirmation uses the configured input name");
+                typeof(MainForm).GetMethod("UseLegacyProfile", flags)!.Invoke(generic, [true]);
+                Check(!review.Checked &&
+                    ((Button[])typeof(MainForm).GetField("switches", flags)!.GetValue(generic)!).Length == 0 &&
+                    Convert.ToString(grid.Rows[1].Cells[1].Value) == "0x05",
+                    "Explicit Odyssey preset import retains known values but still requires review and Save before activation");
+                var reviewWindow = (Form)typeof(MainForm).GetField("advanced", flags)!.GetValue(generic)!;
+                var reviewTabs = reviewWindow.Controls.OfType<TabControl>().Single();
+                using (var reviewFont = new System.Drawing.Font(reviewWindow.Font.FontFamily, 18))
+                {
+                    reviewWindow.Font = reviewFont;
+                    reviewTabs.SelectedIndex = 1;
+                    reviewWindow.Show();
+                    reviewWindow.PerformLayout();
+                    var reviewBounds = reviewWindow.RectangleToClient(review.RectangleToScreen(review.ClientRectangle));
+                    Check(reviewWindow.Width <= Screen.FromControl(reviewWindow).WorkingArea.Width &&
+                        reviewWindow.Height <= Screen.FromControl(reviewWindow).WorkingArea.Height &&
+                        reviewWindow.ClientRectangle.Contains(reviewBounds),
+                        "The per-monitor review checkbox remains reachable within screen-sized settings at large fonts");
+                    reviewWindow.Hide();
+                    reviewWindow.Font = generic.Font;
+                }
                 generic.RenderMonitorProfile(new MonitorProfile(), "other-monitor", genericMonitor);
                 Check(((Button[])typeof(MainForm).GetField("switches", flags)!.GetValue(generic)!).Length == 0 &&
                     !generic.Visible,
@@ -773,6 +893,7 @@ var layoutThread = new Thread(() =>
             typeof(MainForm).GetField("initializationQueued", flags)!.SetValue(large, true);
             var profile = new MonitorProfile
             {
+                Source = InputConfigurationSource.UserConfigured,
                 Inputs = Enumerable.Range(0, 30).Select(i => new MonitorInput
                 {
                     Id = $"input-{i}", Name = $"Input {i}", Value = i.ToString()

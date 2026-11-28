@@ -1,6 +1,7 @@
 namespace OdysseyInputSwitcher;
 
-internal sealed record MonitorSetupOption(string Name, string? Identity, MonitorProfileDiscovery Discovery)
+internal sealed record MonitorSetupOption(string Name, string? Identity, MonitorProfileDiscovery Discovery,
+    bool Identified = true)
 {
     public override string ToString() => Name;
 }
@@ -65,12 +66,14 @@ internal sealed class MonitorSetupDialog : Form
             var choice = options[MonitorChoice.SelectedIndex];
             SaveDefault.Enabled = choice.Identity is not null;
             ConfigureInputs.Enabled = true;
-            string inputs = choice.Discovery.Profile.Inputs.Count == 0
-                ? "We couldn't find input settings for this monitor. Choose Edit inputs to add them from its documentation."
-                : (choice.Discovery.Remembered ? "Saved inputs: " : "Detected inputs: ") +
-                    string.Join(", ", choice.Discovery.Profile.Inputs.Select(input => input.Name)) +
-                    ". Choose Edit inputs if anything needs changing.";
-            InputSummary.Text = inputs + (choice.Identity is null
+            var profile = choice.Discovery.Profile;
+            ConfigureInputs.Text = profile.Configured ? "Edit inputs..." : "Review inputs...";
+            string inputs = profile.Configured
+                ? "Saved user-configured inputs: " + string.Join(", ", profile.Inputs.Select(input => input.Name)) +
+                    ". Choose Edit inputs if anything needs changing."
+                : MonitorProfiles.ReviewExplanation(profile);
+            InputSummary.Text = (choice.Identified ? "" : "Windows couldn't identify this monitor's model.\r\n") +
+                inputs + (choice.Identity is null
                 ? "\r\nWindows couldn't uniquely identify this monitor, so a default cannot be saved. " +
                     "You can still configure it for this connection."
                 : "");
