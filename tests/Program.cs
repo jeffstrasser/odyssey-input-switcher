@@ -614,6 +614,11 @@ var layoutThread = new Thread(() =>
                 genericButtons.Select(button => button.Text).SequenceEqual(genericTray.Select(item => item.Text)) &&
                 genericButtons.All(button => button.Enabled),
                 "Generic profiles render every advertised input consistently in main and tray actions");
+            var genericPanel = (TableLayoutPanel)genericButtons[0].Parent!;
+            Check(genericButtons.Select(button => genericPanel.GetCellPosition(button))
+                    .SequenceEqual(new[] { new TableLayoutPanelCellPosition(0, 0), new(1, 0), new(0, 1), new(1, 1) }) &&
+                genericButtons.All(button => genericPanel.GetColumnSpan(button) == 1),
+                "Four configured inputs occupy two rows without dropping actions");
             var grid = (DataGridView)typeof(MainForm).GetField("profileGrid", flags)!.GetValue(generic)!;
             grid.Rows[0].Cells[0].Value = "Work PC & dock";
             grid.Rows[0].Cells[1].Value = "0x1234";
@@ -630,6 +635,14 @@ var layoutThread = new Thread(() =>
                     profile.Inputs[0].Value == "0x1234" && !profile.Inputs[1].Visible &&
                     profile.Inputs[3].Value == "0x99",
                     "Manual setup saves additions, removals, names, values and visibility together");
+                genericButtons = (Button[])typeof(MainForm).GetField("switches", flags)!.GetValue(generic)!;
+                genericPanel = (TableLayoutPanel)genericButtons[0].Parent!;
+                var shown = genericButtons.Where((_, i) => profile.Inputs[i].Visible).ToArray();
+                Check(shown.Length == 3 &&
+                    shown.Select(button => genericPanel.GetCellPosition(button)).SequenceEqual(
+                        new[] { new TableLayoutPanelCellPosition(0, 0), new(1, 0), new(0, 1) }) &&
+                    genericPanel.GetColumnSpan(shown[2]) == 2,
+                    "Hidden profile inputs leave no gaps and the last odd card spans the row");
                 var confirmation = generic.CreateInputConfirmation("Generic test", 0, 0x1234);
                 using (confirmation.Dialog)
                     Check(confirmation.Dialog.Controls.OfType<TableLayoutPanel>().Single()
@@ -642,6 +655,34 @@ var layoutThread = new Thread(() =>
             }
             finally { if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true); }
         }
+        string largePlacementPath = Path.Combine(Path.GetTempPath(), "OdysseyLargeLayout-" + Guid.NewGuid() + ".json");
+        try
+        {
+            using var large = new MainForm(windowPositionPath: largePlacementPath);
+            var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+            typeof(MainForm).GetField("initializationQueued", flags)!.SetValue(large, true);
+            var profile = new MonitorProfile
+            {
+                Inputs = Enumerable.Range(0, 30).Select(i => new MonitorInput
+                {
+                    Id = $"input-{i}", Name = $"Input {i}", Value = i.ToString()
+                }).ToList()
+            };
+            large.RenderMonitorProfile(profile, null, null);
+            large.Show();
+            large.PerformLayout();
+            var cards = (Button[])typeof(MainForm).GetField("switches", flags)!.GetValue(large)!;
+            Check(cards.Length == 30 && large.Height <= Screen.FromControl(large).WorkingArea.Height &&
+                large.VerticalScroll.Visible,
+                $"Many configured input cards remain reachable by scrolling within the screen " +
+                $"(count={cards.Length}, size={large.Size}, workingArea={Screen.FromControl(large).WorkingArea}, " +
+                $"scroll={large.VerticalScroll.Visible})");
+            large.ScrollControlIntoView(cards[^1]);
+            var lastCard = large.RectangleToClient(cards[^1].RectangleToScreen(cards[^1].ClientRectangle));
+            Check(lastCard.Top >= 0 && lastCard.Bottom <= large.ClientSize.Height,
+                "The final input card can be scrolled fully into view");
+        }
+        finally { if (File.Exists(largePlacementPath)) File.Delete(largePlacementPath); }
         using (var hidden = new MainForm(startInTray: true, windowPositionPath: placementPath))
         {
             hidden.Show();
@@ -793,7 +834,7 @@ var layoutThread = new Thread(() =>
         main.Show();
         main.PerformLayout();
         Check(main.ClientSize.Width <= 460 * main.DeviceDpi / 96d &&
-            main.ClientSize.Height <= 300 * main.DeviceDpi / 96d,
+            main.ClientSize.Height <= 380 * main.DeviceDpi / 96d,
             $"Default main window stays compact (client={main.ClientSize}, DPI={main.DeviceDpi})");
         Check(advanced.ClientSize.Width == Math.Ceiling(650 * advanced.DeviceDpi / 96d) &&
             advanced.ClientSize.Height <= 600 * advanced.DeviceDpi / 96d,
@@ -876,12 +917,14 @@ var layoutThread = new Thread(() =>
                     Check(switches.Select(button => button.Visible).SequenceEqual(expected) &&
                         trayInputs.Select(item => item.Available).SequenceEqual(expected),
                         $"Visibility updates main and tray actions for mask {mask} at {size}pt");
-                    int[] widths = inputPanel.GetColumnWidths();
                     int count = expected.Count(visible => visible);
+                    var visibleButtons = switches.Where((_, i) => expected[i]).ToArray();
                     Check(count == 0 ? inputPanel.RowStyles[0].Height == 0 :
-                        Enumerable.Range(0, 3).All(i => expected[i] ? widths[i] > 0 : widths[i] == 0) &&
-                        widths.Sum() == inputPanel.ClientSize.Width,
-                        $"Visible buttons reflow without empty slots for mask {mask} at {size}pt");
+                        visibleButtons.Select((button, index) =>
+                            inputPanel.GetCellPosition(button) == new TableLayoutPanelCellPosition(index % 2, index / 2) &&
+                            inputPanel.GetColumnSpan(button) == (index == count - 1 && count % 2 != 0 ? 2 : 1))
+                        .All(matches => matches),
+                        $"Visible cards reflow in two columns with an optional full-width final card for mask {mask} at {size}pt");
                     Check(hiddenMessage.Visible == (count == 0) &&
                         trayMenu.Items.OfType<ToolStripMenuItem>().Single(item =>
                             item.Text == "All inputs hidden - Settings > Inputs...").Available == (count == 0) &&
@@ -893,11 +936,11 @@ var layoutThread = new Thread(() =>
                         inputValues.Select(field => field.Text).SequenceEqual(originalValues),
                         $"Visibility preserves custom names and VCP values for mask {mask} at {size}pt");
                     Check(Enumerable.Range(0, 3).Where(i => expected[i]).All(i =>
-                        switches[i].Bottom <= inputPanel.RowStyles[0].Height &&
+                        switches[i].Bottom <= inputPanel.ClientSize.Height &&
                         switches[i].Height >= TextRenderer.MeasureText(switches[i].Text, switches[i].Font,
                             new System.Drawing.Size(Math.Max(1, switches[i].Width - switches[i].Padding.Horizontal - 8), int.MaxValue),
                             TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl | TextFormatFlags.NoPrefix).Height +
-                            switches[i].Padding.Vertical),
+                            switches[i].Padding.Vertical + (int)Math.Ceiling(28 * main.DeviceDpi / 96d)),
                         $"Reflowed custom labels fit for mask {mask} at {size}pt");
                 }
                 main.Font = originalFont;
@@ -1040,7 +1083,8 @@ var layoutThread = new Thread(() =>
                     var required = TextRenderer.MeasureText(button.Text, button.Font,
                         new System.Drawing.Size(Math.Max(1, button.Width - button.Padding.Horizontal - 8), int.MaxValue),
                         TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl | TextFormatFlags.NoPrefix);
-                    Check(button.Height >= required.Height + button.Padding.Vertical &&
+                    Check(button.Height >= required.Height + button.Padding.Vertical +
+                            (int)Math.Ceiling(28 * main.DeviceDpi / 96d) &&
                         button.Right <= button.Parent!.ClientSize.Width && button.Bottom <= button.Parent.ClientSize.Height,
                         $"Maximum-length custom button names wrap without clipping at {size}pt");
                 }

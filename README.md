@@ -37,7 +37,7 @@ Open `dist\win-x64\OdysseyInputSwitcher.exe` on an Intel/AMD x64 PC, or `dist\wi
 
 Discovery refreshes automatically after input-switch attempts, display-topology changes, and Windows resume. Rapid changes are debounced; discovery waits for any outstanding monitor operation before replacing its handles. **Refresh** is also available manually. Refreshing and selecting never send input commands.
 
-The main and settings windows have fixed borders: they cannot be manually resized or maximized. The app still uses per-monitor DPI scaling when moved between displays. The compact main window uses a 440-pixel logical minimum client width, smaller buttons, and content-sized height, with no empty status row when idle. Hover over any button for an explanation.
+The main and settings windows have fixed borders: they cannot be manually resized or maximized. The app still uses per-monitor DPI scaling when moved between displays. The compact main window uses a 440-pixel logical minimum client width and content-sized height, with no empty status row when idle. A blue display-selection panel sits above input cards arranged in two columns; an unpaired final card spans the row. Hover over any button for an explanation.
 
 The main window first opens centered within the primary display's working area. After you move it, its normal position is saved on finishing a move, hiding, or closing, and restored on subsequent launches and tray reopenings. Position is stored separately in `%LOCALAPPDATA%\OdysseyInputSwitcher\window-position.json`. Disconnected displays cause a fallback to the primary display center; partly off-screen windows are moved into the available working area after display or DPI changes. Tray startup does not show the window to restore its position.
 
@@ -75,7 +75,7 @@ The settings window has three sections: **General** for startup, switch confirma
 
 Profiles are saved in `%LOCALAPPDATA%\OdysseyInputSwitcher\monitor-profiles.json`, keyed by a unique Windows monitor-interface identity. Each monitor keeps its own inputs, names, values, and visibility. A new monitor never inherits another monitor's mapping. If Windows cannot provide an unambiguous identity, configuration lasts only for the current connection and must be entered again after rediscovery.
 
-Hidden inputs disappear from the main window and tray, with no empty button slots. Every input remains editable in Settings so you can show it again. If no inputs are configured or all are hidden, a message directs you to **Settings > Inputs...**.
+Hidden inputs disappear from the main window and tray, and the remaining cards reflow without empty slots. Every input remains editable in Settings so you can show it again. If no inputs are configured or all are hidden, a message directs you to **Settings > Inputs...**.
 
 **Settings > Advanced... > Diagnostics** contains the detailed log, process architecture, selected display, Windows monitor-interface identity, and saved default. **Read monitor diagnostics** reads VCP `0x60` and the raw capabilities string; each read's error is shown independently. A current value or `60(...)` capabilities list does not prove a working write mapping. Initial setup reads capabilities only, never the current input or an automatic write.
 
