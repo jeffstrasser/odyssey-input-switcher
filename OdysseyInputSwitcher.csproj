@@ -13,7 +13,7 @@
     <Product>Connected Display Input Selector</Product>
     <AssemblyTitle>Connected Display Input Selector</AssemblyTitle>
     <Description>Select configured inputs on connected DDC/CI displays.</Description>
-    <Version>3</Version>
+    <Version>4</Version>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
   <ItemGroup>
