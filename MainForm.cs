@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Drawing.Drawing2D;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text.Json;
@@ -8,13 +9,15 @@ namespace OdysseyInputSwitcher;
 internal sealed class MainForm : Form
 {
     internal const string AppName = "Connected Display Input Selector";
-    private static readonly Color Canvas = Color.FromArgb(245, 247, 251);
-    private static readonly Color Ink = Color.FromArgb(28, 39, 58);
-    private static readonly Color Accent = Color.FromArgb(36, 91, 219);
+    internal static readonly Color Canvas = Color.FromArgb(245, 248, 252);
+    internal static readonly Color Ink = Color.FromArgb(18, 39, 68);
+    internal static readonly Color Accent = Color.FromArgb(30, 82, 190);
+    private static readonly Color Outline = Color.FromArgb(194, 205, 222);
     private readonly ComboBox monitors = new()
     {
         DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill,
-        AccessibleName = "Monitor", DropDownWidth = 650
+        AccessibleName = "Monitor", DropDownWidth = 650, BackColor = Color.White, ForeColor = Ink,
+        FlatStyle = FlatStyle.Standard
     };
     private readonly Button refresh = MakeButton("Refresh");
     private readonly Button saveDefault = MakeButton("Save selected monitor as default");
@@ -22,7 +25,10 @@ internal sealed class MainForm : Form
     private readonly ToolStripMenuItem settingsMenu = new("&Settings");
     private readonly CheckBox runAtStartup = new() { Text = "Run at Windows startup", AutoSize = true };
     private readonly ToolStripMenuItem settingsUpdate = new("Check for updates...");
-    private readonly TabControl settingsTabs = new() { Dock = DockStyle.Fill, Padding = new Point(10, 4) };
+    private readonly TabControl settingsTabs = new()
+    {
+        Dock = DockStyle.Fill, Padding = new Point(14, 7), AccessibleName = "Settings sections"
+    };
     private readonly ToolTip buttonHelp = new() { AutoPopDelay = 15000 };
     private bool settingsReady;
     private bool sizingSettings;
@@ -72,7 +78,9 @@ internal sealed class MainForm : Form
     {
         Dock = DockStyle.Top, Height = 180, AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
         AllowUserToAddRows = true, AllowUserToDeleteRows = true, RowHeadersVisible = true,
-        AccessibleName = "Selected monitor input configuration"
+        AccessibleName = "Selected monitor input configuration",
+        BackgroundColor = Color.White, BorderStyle = BorderStyle.FixedSingle,
+        GridColor = Outline, EnableHeadersVisualStyles = false
     };
     private readonly Label profileExplanation = new() { AutoSize = true, Dock = DockStyle.Fill };
     private Dictionary<string, MonitorProfile> profiles = new(StringComparer.OrdinalIgnoreCase);
@@ -244,13 +252,17 @@ internal sealed class MainForm : Form
         UpdateControls();
     }
 
-    private static Button MakeButton(string text, bool primary = false) => new()
+    internal static Button MakeButton(string text, bool primary = false) => new()
     {
-        Text = text, AutoSize = true, FlatStyle = FlatStyle.Flat,
+        Text = text, AccessibleName = text.Replace("&", ""), AutoSize = true, FlatStyle = FlatStyle.Flat,
         BackColor = primary ? Accent : Color.White, ForeColor = primary ? Color.White : Ink,
-        Padding = new Padding(8, 3, 8, 3), Cursor = Cursors.Hand,
-        FlatAppearance = { BorderSize = 0, MouseOverBackColor = primary
-            ? Color.FromArgb(24, 72, 184) : Color.FromArgb(230, 236, 247) }
+        Padding = primary ? new Padding(8, 3, 8, 3) : new Padding(12, 5, 12, 5), Cursor = Cursors.Hand,
+        FlatAppearance =
+        {
+            BorderSize = 1, BorderColor = primary ? Accent : Outline,
+            MouseOverBackColor = primary ? Color.FromArgb(22, 64, 151) : Color.FromArgb(232, 239, 250),
+            MouseDownBackColor = primary ? Color.FromArgb(15, 48, 119) : Color.FromArgb(218, 229, 246)
+        }
     };
 
     private static TableLayoutPanel MakeSettingsActions()
@@ -329,6 +341,8 @@ internal sealed class MainForm : Form
     protected override void OnLocationChanged(EventArgs e)
     {
         base.OnLocationChanged(e);
+        if (IsHandleCreated)
+            SetScaledMinimumSize();
         if (placementLoaded && !positioningWindow && Visible && WindowState == FormWindowState.Normal)
         {
             normalLocation = new WindowLocation { X = Left, Y = Top };
@@ -423,6 +437,9 @@ internal sealed class MainForm : Form
 
     private void SetScaledMinimumSize()
     {
+        var area = Screen.FromRectangle(Bounds).WorkingArea;
+        if (MaximumSize != area.Size)
+            MaximumSize = area.Size;
         // ClientSize excludes visible scrollbars as well as the native window frame.
         MinimumSize = new Size((int)Math.Ceiling(440 * DeviceDpi / 96d) + Width - ClientSize.Width,
             SizeFromClientSize(Size.Empty).Height);
@@ -435,66 +452,65 @@ internal sealed class MainForm : Form
         var layout = new TableLayoutPanel
         {
             Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            Padding = new Padding(14), ColumnCount = 1, RowCount = 7
+            Padding = new Padding(18, 12, 18, 12), ColumnCount = 1, RowCount = 7, BackColor = Color.White
         };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         AutoScroll = true;
         for (int i = 0; i < 7; i++)
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        layout.Controls.Add(new Label
-        {
-            Text = "Monitor", Font = new Font(Font, FontStyle.Bold),
-            AutoSize = true, Dock = DockStyle.Top, Margin = new Padding(0, 0, 0, 2)
-        }, 0, 0);
         var selection = new TableLayoutPanel
         {
-            Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 2
+            Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            ColumnCount = 1, Padding = new Padding(10), BackColor = Color.FromArgb(224, 238, 255),
+            Margin = new Padding(0, 0, 0, 4)
         };
         selection.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        selection.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        monitors.Margin = new Padding(0, 6, 10, 8);
-        selection.Controls.Add(monitors, 0, 0);
-        selection.Controls.Add(refresh, 1, 0);
-        DescribeButton(refresh, "Find connected monitors again. Does not switch inputs.");
-        layout.Controls.Add(selection, 0, 1);
+        selection.Controls.Add(new Label
+        {
+            Text = "Selected display", AutoSize = true, ForeColor = Color.FromArgb(69, 104, 148),
+            Font = new Font(Font, FontStyle.Bold), Margin = new Padding(0, 0, 0, 7)
+        }, 0, 0);
+        monitors.Margin = new Padding(0, 0, 0, 3);
+        selection.Controls.Add(monitors, 0, 1);
         defaultLabel.Dock = DockStyle.Fill;
-        defaultLabel.Margin = new Padding(0, 2, 0, 4);
-        layout.Controls.Add(defaultLabel, 0, 2);
+        defaultLabel.Margin = new Padding(0, 4, 0, 0);
+        selection.Controls.Add(defaultLabel, 0, 2);
+        layout.Controls.Add(selection, 0, 1);
         layout.Controls.Add(new Label
         {
             Text = "Switch input", AutoSize = true,
-            Font = new Font(Font, FontStyle.Bold), Margin = new Padding(0, 8, 0, 2)
-        }, 0, 3);
+            Font = new Font(Font, FontStyle.Bold), Margin = new Padding(0, 8, 0, 4)
+        }, 0, 2);
         var inputs = new TableLayoutPanel
         {
             Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            RowCount = 2, ColumnCount = 3,
-            Margin = new Padding(0, 4, 0, 6)
+            ColumnCount = 2, Margin = new Padding(0, 0, 0, 6)
         };
         mainInputs = inputs;
-        inputs.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
-        inputs.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        inputs.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        inputs.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
         for (int i = 0; i < inputNames.Length; i++)
         {
             int index = i;
-            inputs.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3));
-            switches[i] = MakeButton(inputNames[i], primary: true);
-            switches[i].UseMnemonic = false;
-            switches[i].AccessibleName = "Switch to " + inputNames[i];
-            switches[i].Dock = DockStyle.Fill;
-            switches[i].MinimumSize = new Size(0, 36);
+            switches[i] = MakeInputButton(inputNames[i]);
             DescribeButton(switches[i], "Switch the selected monitor to " + inputNames[i] + ".");
             switches[i].Click += async (_, _) => await SwitchAsync(index);
-            inputs.Controls.Add(switches[i], i, 0);
             switches[i].FontChanged += (_, _) => SizeInputButtons(inputs);
         }
-        inputs.Controls.Add(allInputsHidden, 0, 1);
-        inputs.SetColumnSpan(allInputsHidden, 3);
+        ReflowInputButtons();
         inputs.SizeChanged += (_, _) => SizeInputButtons(inputs);
-        layout.Controls.Add(inputs, 0, 4);
+        layout.Controls.Add(inputs, 0, 3);
+        refresh.Margin = new Padding(0, 4, 0, 0);
+        refresh.Padding = new Padding(8, 3, 8, 3);
+        refresh.Anchor = AnchorStyles.Right;
+        DescribeButton(refresh, "Find connected monitors again. Does not switch inputs.");
+        layout.Controls.Add(refresh, 0, 4);
         status.Dock = DockStyle.Fill;
         status.Margin = new Padding(0, 6, 0, 0);
         layout.Controls.Add(status, 0, 5);
+        errorPanel.Padding = new Padding(10);
+        errorPanel.BackColor = Color.FromArgb(255, 241, 242);
+        errorPanel.BorderStyle = BorderStyle.FixedSingle;
         errorPanel.Controls.Add(errorStatus, 0, 0);
         var errorActions = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top };
         var details = MakeButton("Details...");
@@ -506,14 +522,64 @@ internal sealed class MainForm : Form
         errorActions.Controls.AddRange([details, dismiss]);
         errorPanel.Controls.Add(errorActions, 0, 1);
         errorPanel.Layout += (_, _) =>
-            errorStatus.MaximumSize = new Size(Math.Max(1, layout.ClientSize.Width - layout.Padding.Horizontal), 0);
+            errorStatus.MaximumSize = new Size(Math.Max(1, errorPanel.ClientSize.Width - errorPanel.Padding.Horizontal - 8), 0);
         layout.Controls.Add(errorPanel, 0, 6);
         Controls.Add(layout);
         menuBar.Font = Font;
+        menuBar.BackColor = Canvas;
+        menuBar.ForeColor = Ink;
+        menuBar.RenderMode = ToolStripRenderMode.System;
         menuBar.Items.Add(settingsMenu);
         MainMenuStrip = menuBar;
         Controls.Add(menuBar);
         FontChanged += (_, _) => menuBar.Font = Font;
+    }
+
+    private static Button MakeInputButton(string name) => new InputCardButton
+    {
+        Text = name, UseMnemonic = false, AccessibleName = "Switch to " + name,
+        Dock = DockStyle.Fill, Margin = new Padding(3), Padding = new Padding(12, 6, 12, 6),
+        MinimumSize = new Size(0, 64), Cursor = Cursors.Hand
+    };
+
+    private void ReflowInputButtons()
+    {
+        var inputs = mainInputs;
+        inputs.SuspendLayout();
+        try
+        {
+            inputs.Controls.Clear();
+            inputs.RowStyles.Clear();
+            int count = visibleInputs.Count(visible => visible);
+            int rows = (count + 1) / 2;
+            inputs.RowCount = Math.Max(1, rows) + 1 + switches.Length - count;
+            for (int i = 0; i < Math.Max(1, rows); i++)
+                inputs.RowStyles.Add(new RowStyle(SizeType.Absolute, 0));
+            inputs.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            int visibleIndex = 0, hiddenIndex = 0;
+            for (int i = 0; i < switches.Length; i++)
+            {
+                var button = switches[i];
+                button.Visible = visibleInputs[i];
+                if (visibleInputs[i])
+                {
+                    int row = visibleIndex / 2;
+                    inputs.Controls.Add(button, visibleIndex % 2, row);
+                    inputs.SetColumnSpan(button, visibleIndex == count - 1 && count % 2 != 0 ? 2 : 1);
+                    visibleIndex++;
+                }
+                else
+                {
+                    inputs.RowStyles.Add(new RowStyle(SizeType.Absolute, 0));
+                    inputs.Controls.Add(button, 0, Math.Max(1, rows) + 1 + hiddenIndex++);
+                }
+            }
+            inputs.Controls.Add(allInputsHidden, 0, Math.Max(1, rows));
+            inputs.SetColumnSpan(allInputsHidden, 2);
+            allInputsHidden.Visible = count == 0;
+            SizeInputButtons(inputs);
+        }
+        finally { inputs.ResumeLayout(performLayout: true); }
     }
 
     private void SizeInputButtons(TableLayoutPanel inputs)
@@ -524,25 +590,31 @@ internal sealed class MainForm : Form
             inputs.RowStyles[0].Height = 0;
             return;
         }
-        int width = inputs.ClientSize.Width / count;
+        int width = inputs.ClientSize.Width;
         if (width <= 0 || switches.Any(button => button is null))
             return;
-        int height = (int)Math.Ceiling(36 * DeviceDpi / 96d);
+        int visibleIndex = 0;
+        var heights = new int[(count + 1) / 2];
         for (int i = 0; i < switches.Length; i++)
         {
             if (!visibleInputs[i])
                 continue;
             var button = switches[i];
-            button.MaximumSize = new Size(Math.Max(1, width - button.Margin.Horizontal), 0);
-            int textWidth = Math.Max(1, width - button.Margin.Horizontal - button.Padding.Horizontal - 8);
+            int buttonWidth = visibleIndex == count - 1 && count % 2 != 0 ? width : width / 2;
+            button.MaximumSize = new Size(Math.Max(1, buttonWidth - button.Margin.Horizontal), 0);
+            int textWidth = Math.Max(1, buttonWidth - button.Margin.Horizontal - button.Padding.Horizontal - 8);
             var textSize = TextRenderer.MeasureText(button.Text, button.Font,
                 new Size(textWidth, int.MaxValue),
                 TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl | TextFormatFlags.NoPrefix);
-            height = Math.Max(height, Math.Max(button.MinimumSize.Height,
-                textSize.Height + button.Padding.Vertical + 8) + button.Margin.Vertical);
+            int iconHeight = (int)Math.Ceiling(26 * DeviceDpi / 96d);
+            int height = Math.Max(button.MinimumSize.Height,
+                textSize.Height + button.Padding.Vertical + iconHeight + 8) + button.Margin.Vertical;
+            int row = visibleIndex++ / 2;
+            heights[row] = Math.Max(heights[row], height);
         }
-        if (inputs.RowStyles[0].Height != height)
-            inputs.RowStyles[0].Height = height;
+        for (int row = 0; row < heights.Length; row++)
+            if (inputs.RowStyles[row].Height != heights[row])
+                inputs.RowStyles[row].Height = heights[row];
     }
 
     private void BuildAdvancedWindow()
@@ -573,7 +645,7 @@ internal sealed class MainForm : Form
         var diagnosticLayout = new TableLayoutPanel
         {
             Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            ColumnCount = 1, RowCount = 3
+            ColumnCount = 1, RowCount = 3, BackColor = Color.White, Padding = new Padding(12)
         };
         diagnosticLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         diagnosticLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -602,12 +674,12 @@ internal sealed class MainForm : Form
         var generalLayout = new TableLayoutPanel
         {
             Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            ColumnCount = 1, RowCount = 5
+            ColumnCount = 1, RowCount = 5, BackColor = Color.White, Padding = new Padding(12)
         };
         generalLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         generalLayout.Controls.Add(new Label
         {
-            Text = "Startup and confirmation changes are saved immediately.\r\n" +
+            Text = "Make the app work your way.\r\nStartup and confirmation changes are saved immediately.\r\n" +
                 "Choose a monitor in the main window before saving it as your default.",
             AutoSize = true, Dock = DockStyle.Fill, Margin = new Padding(3, 0, 3, 12)
         }, 0, 0);
@@ -629,7 +701,7 @@ internal sealed class MainForm : Form
         var namesLayout = new TableLayoutPanel
         {
             Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            ColumnCount = 3, RowCount = 5
+            ColumnCount = 3, RowCount = 5, BackColor = Color.White, Padding = new Padding(12)
         };
         namesLayout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         namesLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
@@ -685,7 +757,10 @@ internal sealed class MainForm : Form
         namesTab.Controls.Add(namesLayout);
         settingsTabs.TabPages.Add(namesTab);
         var advancedTab = new TabPage("Advanced") { BackColor = Canvas };
-        var advancedTabs = new TabControl { Dock = DockStyle.Fill, Padding = new Point(10, 4) };
+        var advancedTabs = new TabControl
+        {
+            Dock = DockStyle.Fill, Padding = new Point(14, 7), AccessibleName = "Advanced settings sections"
+        };
         advancedTabs.TabPages.Add(diagnosticTab);
         advancedTab.Controls.Add(advancedTabs);
         settingsTabs.TabPages.Add(advancedTab);
@@ -782,6 +857,8 @@ internal sealed class MainForm : Form
         trayMenu.Items.Add(new ToolStripSeparator());
         trayMenu.Items.Add("&Quit", null, (_, _) => ExitApplication());
         trayMenu.Opening += (_, _) => UpdateControls();
+        trayMenu.Font = Font;
+        trayMenu.RenderMode = ToolStripRenderMode.System;
         tray.Icon = Icon;
         tray.Text = AppName;
         tray.ContextMenuStrip = trayMenu;
@@ -1328,27 +1405,15 @@ internal sealed class MainForm : Form
             visibleInputs = profile.Inputs.Select(input => input.Visible).ToArray();
             switches = new Button[profile.Inputs.Count];
             trayInputs = new ToolStripMenuItem[profile.Inputs.Count];
-            mainInputs.SetColumnSpan(allInputsHidden, 1);
-            mainInputs.ColumnStyles.Clear();
-            mainInputs.ColumnCount = Math.Max(1, profile.Inputs.Count);
             int visibleCount = visibleInputs.Count(value => value);
             for (int i = 0; i < switches.Length; i++)
             {
                 int index = i;
-                bool fill = visibleInputs[i] || (visibleCount == 0 && i == 0);
-                mainInputs.ColumnStyles.Add(new ColumnStyle(fill ? SizeType.Percent : SizeType.Absolute,
-                    fill ? 100f / Math.Max(1, visibleCount) : 0));
-                var button = MakeButton(displayNames[i], primary: true);
-                button.UseMnemonic = false;
-                button.AccessibleName = "Switch to " + displayNames[i];
-                button.Dock = DockStyle.Fill;
-                button.MinimumSize = new Size(0, 36);
+                var button = MakeInputButton(displayNames[i]);
                 DescribeButton(button, "Switch the selected monitor to " + displayNames[i] + ".");
                 button.Click += async (_, _) => await SwitchAsync(index);
                 button.FontChanged += (_, _) => SizeInputButtons(mainInputs);
                 switches[i] = button;
-                mainInputs.Controls.Add(button, i, 0);
-                button.Visible = visibleInputs[i];
                 trayInputs[i] = new ToolStripMenuItem(displayNames[i].Replace("&", "&&"))
                 {
                     AccessibleName = "Switch to " + displayNames[i], Visible = visibleInputs[i]
@@ -1356,16 +1421,13 @@ internal sealed class MainForm : Form
                 trayInputs[i].Click += async (_, _) => await SwitchAsync(index);
                 trayMenu.Items.Insert(2 + i, trayInputs[i]);
             }
-            if (switches.Length == 0)
-                mainInputs.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            mainInputs.SetColumnSpan(allInputsHidden, mainInputs.ColumnCount);
             allInputsHidden.Text = switches.Length == 0
                 ? "No inputs configured. Open Settings > Inputs... to add them."
                 : "All inputs are hidden. Open Settings > Inputs... to show them again.";
             trayAllInputsHidden.Text = switches.Length == 0
                 ? "No inputs configured - Settings > Inputs..." : "All inputs hidden - Settings > Inputs...";
-            allInputsHidden.Visible = trayAllInputsHidden.Visible = visibleCount == 0;
-            SizeInputButtons(mainInputs);
+            trayAllInputsHidden.Visible = visibleCount == 0;
+            ReflowInputButtons();
         }
         finally { mainInputs.ResumeLayout(performLayout: true); }
         profileGrid.Rows.Clear();
@@ -1392,7 +1454,8 @@ internal sealed class MainForm : Form
             control.Dispose();
         var panel = new TableLayoutPanel
         {
-            Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, RowCount = 3
+            Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, RowCount = 3,
+            BackColor = Color.White, Padding = new Padding(12)
         };
         panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -1406,6 +1469,24 @@ internal sealed class MainForm : Form
         profileGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Value", HeaderText = "VCP 0x60 value" });
         profileGrid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "ShowInput", HeaderText = "Show" });
         profileGrid.DefaultValuesNeeded += (_, e) => e.Row.Cells[2].Value = true;
+        profileGrid.DefaultCellStyle.ForeColor = Ink;
+        profileGrid.DefaultCellStyle.BackColor = Color.White;
+        profileGrid.DefaultCellStyle.SelectionBackColor = Accent;
+        profileGrid.DefaultCellStyle.SelectionForeColor = Color.White;
+        profileGrid.DefaultCellStyle.Padding = new Padding(4, 2, 4, 2);
+        profileGrid.AlternatingRowsDefaultCellStyle.BackColor = Canvas;
+        profileGrid.ColumnHeadersDefaultCellStyle.BackColor = Canvas;
+        profileGrid.ColumnHeadersDefaultCellStyle.ForeColor = Ink;
+        profileGrid.ColumnHeadersDefaultCellStyle.Font = new Font(Font, FontStyle.Bold);
+        profileGrid.ColumnHeadersDefaultCellStyle.SelectionBackColor = Canvas;
+        profileGrid.ColumnHeadersDefaultCellStyle.SelectionForeColor = Ink;
+        profileGrid.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize;
+        profileGrid.RowHeadersDefaultCellStyle.BackColor = Canvas;
+        profileGrid.RowHeadersDefaultCellStyle.ForeColor = Ink;
+        profileGrid.RowTemplate.Height = (int)Math.Ceiling(30 * DeviceDpi / 96d);
+        profileGrid.Columns[0].FillWeight = 50;
+        profileGrid.Columns[1].FillWeight = 30;
+        profileGrid.Columns[2].FillWeight = 20;
         panel.Controls.Add(profileGrid, 0, 1);
         var actions = MakeSettingsActions();
         var saveProfile = MakeButton("Save monitor inputs");
@@ -1810,20 +1891,14 @@ internal sealed class MainForm : Form
         inputs.SuspendLayout();
         try
         {
-            int count = visibility.Values.Count(visible => visible);
             for (int i = 0; i < inputNames.Length; i++)
             {
                 bool visible = visibility[inputNames[i]];
                 visibleInputs[i] = visibilityFields[i].Checked = visible;
-                switches[i].Visible = trayInputs[i].Visible = visible;
-                var column = inputs.ColumnStyles[i];
-                bool fill = visible || (count == 0 && i == 0);
-                column.SizeType = fill ? SizeType.Percent : SizeType.Absolute;
-                column.Width = fill ? 100f / Math.Max(1, count) : 0;
+                trayInputs[i].Visible = visible;
             }
-            allInputsHidden.Visible = count == 0;
-            trayAllInputsHidden.Visible = count == 0;
-            SizeInputButtons(inputs);
+            trayAllInputsHidden.Visible = !visibleInputs.Any(visible => visible);
+            ReflowInputButtons();
         }
         finally { inputs.ResumeLayout(performLayout: true); }
         UpdateControls();
@@ -1982,5 +2057,83 @@ internal sealed class MainForm : Form
             Icon?.Dispose();
         }
         base.Dispose(disposing);
+    }
+}
+
+internal sealed class InputCardButton : Button
+{
+    private bool hovered;
+    private bool pressed;
+
+    internal InputCardButton()
+    {
+        FlatStyle = FlatStyle.Flat;
+        FlatAppearance.BorderSize = 0;
+        BackColor = Color.White;
+        ForeColor = Color.FromArgb(18, 39, 68);
+        DoubleBuffered = true;
+    }
+
+    protected override void OnMouseEnter(EventArgs e) { base.OnMouseEnter(e); hovered = true; Invalidate(); }
+    protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); hovered = false; pressed = false; Invalidate(); }
+    protected override void OnMouseDown(MouseEventArgs e) { base.OnMouseDown(e); pressed = true; Invalidate(); }
+    protected override void OnMouseUp(MouseEventArgs e) { base.OnMouseUp(e); pressed = false; Invalidate(); }
+    protected override void OnGotFocus(EventArgs e) { base.OnGotFocus(e); Invalidate(); }
+    protected override void OnLostFocus(EventArgs e) { base.OnLostFocus(e); Invalidate(); }
+    protected override void OnEnabledChanged(EventArgs e) { base.OnEnabledChanged(e); Invalidate(); }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        if (SystemInformation.HighContrast)
+        {
+            base.OnPaint(e);
+            return;
+        }
+
+        var g = e.Graphics;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        g.Clear(Parent?.BackColor ?? SystemColors.Control);
+        float scale = DeviceDpi / 96f;
+        var bounds = new RectangleF(1, 1, Math.Max(0, Width - 3), Math.Max(0, Height - 3));
+        if (bounds.Width <= 0 || bounds.Height <= 0)
+            return;
+        using var card = RoundedRectangle(bounds, 12 * scale);
+        using var background = new SolidBrush(!Enabled ? Color.FromArgb(239, 243, 248)
+            : pressed ? Color.FromArgb(226, 238, 253)
+            : hovered ? Color.FromArgb(242, 248, 255) : Color.White);
+        using var border = new Pen(Focused ? Color.FromArgb(47, 111, 202) : Color.FromArgb(225, 235, 248),
+            Focused ? 2 * scale : scale);
+        g.FillPath(background, card);
+        g.DrawPath(border, card);
+
+        float left = Padding.Left;
+        float top = Padding.Top;
+        float iconSize = 24 * scale;
+        using var iconBackground = new SolidBrush(Enabled ? Color.FromArgb(235, 244, 255) : Color.FromArgb(229, 234, 241));
+        using var icon = RoundedRectangle(new RectangleF(left, top, iconSize, iconSize), 7 * scale);
+        g.FillPath(iconBackground, icon);
+        using var iconPen = new Pen(Enabled ? Color.FromArgb(75, 130, 205) : Color.FromArgb(143, 157, 176), 1.4f * scale);
+        g.DrawRectangle(iconPen, left + 6 * scale, top + 8 * scale, 12 * scale, 8 * scale);
+        g.DrawLine(iconPen, left + 9 * scale, top + 18 * scale, left + 15 * scale, top + 18 * scale);
+        int textTop = (int)Math.Ceiling(top + iconSize + 4 * scale);
+        var textBounds = new Rectangle(Padding.Left, textTop,
+            Math.Max(1, Width - Padding.Horizontal), Math.Max(1, Height - textTop - Padding.Bottom));
+        TextRenderer.DrawText(g, Text, Font, textBounds,
+            Enabled ? ForeColor : SystemColors.GrayText,
+            TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl | TextFormatFlags.NoPrefix);
+        if (Focused && ShowFocusCues)
+            ControlPaint.DrawFocusRectangle(g, Rectangle.Inflate(ClientRectangle, -4, -4));
+    }
+
+    private static GraphicsPath RoundedRectangle(RectangleF rectangle, float radius)
+    {
+        float diameter = Math.Min(radius * 2, Math.Min(rectangle.Width, rectangle.Height));
+        var path = new GraphicsPath();
+        path.AddArc(rectangle.X, rectangle.Y, diameter, diameter, 180, 90);
+        path.AddArc(rectangle.Right - diameter, rectangle.Y, diameter, diameter, 270, 90);
+        path.AddArc(rectangle.Right - diameter, rectangle.Bottom - diameter, diameter, diameter, 0, 90);
+        path.AddArc(rectangle.X, rectangle.Bottom - diameter, diameter, diameter, 90, 90);
+        path.CloseFigure();
+        return path;
     }
 }
